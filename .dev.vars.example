@@ -1,0 +1,7 @@
+# Google service account credentials. Keep the real .dev.vars out of Git.
+GOOGLE_CLIENT_EMAIL=service-account@project-id.iam.gserviceaccount.com
+GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+GOOGLE_SPREADSHEET_ID=your_google_sheet_id
+GOOGLE_SHEET_URL=https://docs.google.com/spreadsheets/d/your_google_sheet_id/edit
+
+# Optional: AI endpoints will be added in a later phase.

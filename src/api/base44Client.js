@@ -1,0 +1,95 @@
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {})
+    }
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.error || `Request failed (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
+  return payload;
+}
+
+function createEntityApi(resource) {
+  return {
+    async list() {
+      return api(`/api/${resource}`);
+    },
+    async filter(filters = {}) {
+      const query = new URLSearchParams();
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+      });
+      return api(`/api/${resource}?${query.toString()}`);
+    },
+    async create(input) {
+      return api(`/api/${resource}`, { method: 'POST', body: JSON.stringify(input) });
+    },
+    async update(id, patch) {
+      return api(`/api/${resource}/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch)
+      });
+    },
+    async bulkCreate(inputs) {
+      if (resource !== 'shifts') throw new Error('Bulk create is only implemented for shifts.');
+      return api('/api/shifts/bulk', {
+        method: 'POST',
+        body: JSON.stringify({ shifts: inputs })
+      });
+    }
+  };
+}
+
+export const base44 = {
+  auth: {
+    async me() {
+      return api('/api/me');
+    },
+    logout() {
+      window.location.assign('/');
+    }
+  },
+  entities: {
+    StaffMember: createEntityApi('staff-members'),
+    Shift: createEntityApi('shifts'),
+    Hinweis: createEntityApi('hinweise')
+  },
+  functions: {
+    async invoke(name, body = {}) {
+      const routes = {
+        exportToGoogleDrive: ['/api/report/export', 'POST'],
+        getDriveFileLink: ['/api/report/link', 'GET'],
+        getSetupStatus: ['/api/setup-status', 'GET'],
+        scanShiftsWithFreeModel: ['/api/scan-shifts', 'POST']
+      };
+      const route = routes[name];
+      if (!route) throw new Error(`Unknown function: ${name}`);
+      const [path, method] = route;
+      const payload = await api(path, {
+        method,
+        ...(method === 'GET' ? {} : { body: JSON.stringify(body) })
+      });
+      return { ...payload, data: payload };
+    }
+  },
+  integrations: {
+    Core: {
+      async UploadFile() {
+        throw new Error('Spracheingabe wird in Phase 2 eingerichtet.');
+      },
+      async TranscribeAudio() {
+        throw new Error('Spracheingabe wird in Phase 2 eingerichtet.');
+      },
+      async InvokeLLM() {
+        throw new Error('Spracheingabe wird in Phase 2 eingerichtet.');
+      }
+    }
+  }
+};
