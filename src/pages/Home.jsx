@@ -12,15 +12,11 @@ import PullToRefresh from '@/components/PullToRefresh';
 
 const APP_TITLE = 'Arbeitszeiten Personal Shiraz';
 
-function syncThenExport() {
-  // Data is stored immediately in D1. The single Google Sheet is refreshed nightly
-  // by the Cloudflare Cron Trigger; a manual refresh is available in Reports.
-}
-
 export default function Home() {
   const navigate = useNavigate();
   const location = useLocation();
   const navigationType = useNavigationType();
+
   const [staffConfig, setStaffConfig] = useState(null);
   const [allStaff, setAllStaff] = useState([]);
   const [staffMembers, setStaffMembers] = useState([]);
@@ -33,22 +29,28 @@ export default function Home() {
 
   const todayIso = new Date().toISOString().slice(0, 10);
   const todayDisplay = new Date().toLocaleDateString('de-DE', {
-    day: '2-digit', month: '2-digit', year: 'numeric'
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
   });
 
   const loadStaffConfig = useCallback(async () => {
     setLoading(true);
+
     try {
       const additional = await base44.entities.StaffMember.list('-created_date', 5000);
       const config = buildEffectiveStaffConfig(additional || []);
+
       setStaffConfig(config);
       setAllStaff(getAllHinweisEmployees(config));
       setStaffMembers(additional || []);
-    } catch (e) {
-      // fallback to base config
+    } catch (error) {
+      console.warn('Mitarbeiter konnten nicht geladen werden:', error);
+
       const config = buildEffectiveStaffConfig([]);
       setStaffConfig(config);
       setAllStaff(getAllHinweisEmployees(config));
+      setStaffMembers([]);
     } finally {
       setLoading(false);
     }
@@ -63,21 +65,27 @@ export default function Home() {
     setSelectedDepartment('');
     setSelectedEmployee('');
     setSelectedHinweisEmployee('');
+    setSelectedScanBusiness('');
     navigate('/');
   }
 
   function selectBusiness(business) {
     setSelectedBusiness(business);
+    setSelectedDepartment('');
+    setSelectedEmployee('');
+
     if (business === 'Catering') {
       setSelectedDepartment('Catering');
       navigate('/employee');
-    } else {
-      navigate('/department');
+      return;
     }
+
+    navigate('/department');
   }
 
   function selectDepartment(department) {
     setSelectedDepartment(department);
+    setSelectedEmployee('');
     navigate('/employee');
   }
 
@@ -93,41 +101,62 @@ export default function Home() {
       employee: name,
       employeeKey: normalizePersonName(name)
     });
+
     await loadStaffConfig();
-    syncThenExport();
   }
 
   async function handleHideEmployee(employee) {
-    const empKey = normalizePersonName(employee);
-    const record = staffMembers.find((m) =>
-      m.business === selectedBusiness &&
-      m.department === selectedDepartment &&
-      (m.employeeKey || normalizePersonName(m.employee)) === empKey
+    const employeeKey = normalizePersonName(employee);
+
+    const record = staffMembers.find(
+      (member) =>
+        member.business === selectedBusiness &&
+        member.department === selectedDepartment &&
+        (member.employeeKey || normalizePersonName(member.employee)) === employeeKey
     );
-    if (record && record.hidden) return; // already hidden
+
+    if (record?.hidden) return;
+
     if (record) {
-      await base44.entities.StaffMember.update(record.id, { hidden: true });
+      await base44.entities.StaffMember.update(record.id, {
+        hidden: true
+      });
     } else {
       await base44.entities.StaffMember.create({
         business: selectedBusiness,
         department: selectedDepartment,
         employee,
-        employeeKey: empKey,
+        employeeKey,
         hidden: true
       });
     }
+
     await loadStaffConfig();
-    syncThenExport();
   }
 
-  async function handleSaveShift({ date, startTime, endTime, durationHours }) {
+  async function handleSaveShift({
+    date,
+    startTime,
+    endTime,
+    durationHours
+  }) {
     const employeeKey = normalizePersonName(selectedEmployee);
+
     const existing = await base44.entities.Shift.filter({
-      employeeKey, date, startTime, endTime, business: selectedBusiness, department: selectedDepartment
+      business: selectedBusiness,
+      department: selectedDepartment,
+      employeeKey,
+      date,
+      startTime,
+      endTime
     });
-    if (existing && existing.length > 0) {
-      throw new Error('Diese Schicht wurde für diesen Mitarbeiter an diesem Tag bereits erfasst.');
+
+    if (existing?.length > 0) {
+      throw new Error(
+        'Diese Schicht wurde für diesen Mitarbeiter an diesem Tag bereits erfasst.'
+      );
     }
+
     await base44.entities.Shift.create({
       business: selectedBusiness,
       department: selectedDepartment,
@@ -138,15 +167,34 @@ export default function Home() {
       endTime,
       durationHours
     });
-    syncThenExport();
   }
 
-  async function handleVoiceAddShift({ business, department, employee, date, startTime, endTime, durationHours }) {
+  async function handleVoiceAddShift({
+    business,
+    department,
+    employee,
+    date,
+    startTime,
+    endTime,
+    durationHours
+  }) {
     const employeeKey = normalizePersonName(employee);
-    const existing = await base44.entities.Shift.filter({ employeeKey, date, startTime, endTime, business, department });
-    if (existing && existing.length > 0) {
-      throw new Error('Diese Schicht wurde für diesen Mitarbeiter an diesem Tag bereits erfasst.');
+
+    const existing = await base44.entities.Shift.filter({
+      business,
+      department,
+      employeeKey,
+      date,
+      startTime,
+      endTime
+    });
+
+    if (existing?.length > 0) {
+      throw new Error(
+        'Diese Schicht wurde für diesen Mitarbeiter an diesem Tag bereits erfasst.'
+      );
     }
+
     await base44.entities.Shift.create({
       business,
       department,
@@ -157,24 +205,41 @@ export default function Home() {
       endTime,
       durationHours
     });
-    syncThenExport();
   }
 
   async function handleScanAddShifts(shifts) {
-    const toCreate = [];
+    const shiftsToCreate = [];
+
     for (const shift of shifts) {
       const employeeKey = normalizePersonName(shift.employee);
+
       const existing = await base44.entities.Shift.filter({
-        employeeKey, date: shift.date, startTime: shift.startTime, endTime: shift.endTime,
-        business: shift.business, department: shift.department
+        business: shift.business,
+        department: shift.department,
+        employeeKey,
+        date: shift.date,
+        startTime: shift.startTime,
+        endTime: shift.endTime
       });
-      if (existing && existing.length > 0) continue; // skip duplicates, don't fail the whole batch
-      toCreate.push({ ...shift, employeeKey });
+
+      if (existing?.length > 0) continue;
+
+      shiftsToCreate.push({
+        ...shift,
+        employeeKey
+      });
     }
-    if (toCreate.length > 0) {
-      await base44.entities.Shift.bulkCreate(toCreate);
-      syncThenExport();
+
+    if (shiftsToCreate.length === 0) {
+      return {
+        created: 0,
+        skipped: shifts.length
+      };
     }
+
+    const result = await base44.entities.Shift.bulkCreate(shiftsToCreate);
+
+    return result;
   }
 
   function openScanShifts(business) {
@@ -199,13 +264,12 @@ export default function Home() {
       date,
       text
     });
-    syncThenExport();
   }
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-neutral-200 border-t-neutral-800 rounded-full animate-spin"></div>
+        <div className="w-8 h-8 border-4 border-neutral-200 border-t-neutral-800 rounded-full animate-spin" />
       </div>
     );
   }
@@ -247,8 +311,13 @@ export default function Home() {
     >
       <div className="max-w-2xl mx-auto">
         <div className="bg-white rounded-3xl p-6 shadow-md mb-5 text-center relative">
-          <h1 className="text-2xl font-bold text-neutral-900">{APP_TITLE}</h1>
-          <p className="text-neutral-500 mt-1">Datum: {todayDisplay}</p>
+          <h1 className="text-2xl font-bold text-neutral-900">
+            {APP_TITLE}
+          </h1>
+
+          <p className="text-neutral-500 mt-1">
+            Datum: {todayDisplay}
+          </p>
         </div>
 
         <div className="bg-white rounded-3xl p-6 shadow-md overflow-hidden">
@@ -256,10 +325,22 @@ export default function Home() {
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
                 key={location.pathname}
-                initial={{ x: isPop ? '-100%' : '100%', opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                exit={{ x: isPop ? '100%' : '-100%', opacity: 0 }}
-                transition={{ duration: 0.25, ease: 'easeInOut' }}
+                initial={{
+                  x: isPop ? '-100%' : '100%',
+                  opacity: 0
+                }}
+                animate={{
+                  x: 0,
+                  opacity: 1
+                }}
+                exit={{
+                  x: isPop ? '100%' : '-100%',
+                  opacity: 0
+                }}
+                transition={{
+                  duration: 0.25,
+                  ease: 'easeInOut'
+                }}
               >
                 <Outlet context={outletContext} />
               </motion.div>

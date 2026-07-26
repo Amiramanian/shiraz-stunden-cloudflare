@@ -199,3 +199,155 @@ export async function logAudit(
     actorEmail
   ).run();
 }
+
+// Scan history and aliases
+
+export async function createScanHistory(
+  env: Env,
+  scanId: string,
+  business: string,
+  actorEmail: string | null,
+  imageCount: number
+) {
+  await env.DB.prepare(`
+    INSERT INTO scan_history (id, business, actor_email, image_count, status)
+    VALUES (?, ?, ?, ?, 'processing')
+  `).bind(scanId, business, actorEmail, imageCount).run();
+}
+
+export async function updateScanHistory(
+  env: Env,
+  scanId: string,
+  patch: {
+    status?: 'success' | 'error';
+    ocrText?: string;
+    aiResponseJson?: string;
+    mergedResultJson?: string;
+    finalResultJson?: string;
+    savedCount?: number;
+    skippedCount?: number;
+    errorMessage?: string;
+  }
+) {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (patch.status !== undefined) {
+    fields.push('status = ?');
+    values.push(patch.status);
+  }
+  if (patch.ocrText !== undefined) {
+    fields.push('ocr_text = ?');
+    values.push(patch.ocrText);
+  }
+  if (patch.aiResponseJson !== undefined) {
+    fields.push('ai_response_json = ?');
+    values.push(patch.aiResponseJson);
+  }
+  if (patch.mergedResultJson !== undefined) {
+    fields.push('merged_result_json = ?');
+    values.push(patch.mergedResultJson);
+  }
+  if (patch.finalResultJson !== undefined) {
+    fields.push('final_result_json = ?');
+    values.push(patch.finalResultJson);
+  }
+  if (patch.savedCount !== undefined) {
+    fields.push('saved_count = ?');
+    values.push(patch.savedCount);
+  }
+  if (patch.skippedCount !== undefined) {
+    fields.push('skipped_count = ?');
+    values.push(patch.skippedCount);
+  }
+  if (patch.errorMessage !== undefined) {
+    fields.push('error_message = ?');
+    values.push(patch.errorMessage);
+  }
+
+  if (fields.length === 0) return;
+
+  fields.push('updated_at = datetime(\'now\')');
+  values.push(scanId);
+
+  await env.DB.prepare(`
+    UPDATE scan_history
+    SET ${fields.join(', ')}
+    WHERE id = ?
+  `).bind(...values).run();
+}
+
+export async function getScanAlias(
+  env: Env,
+  business: string,
+  department: string,
+  normalizedRawName: string
+): Promise<{ employee: string; employeeKey: string } | null> {
+  const row = await env.DB.prepare(`
+    SELECT employee, employee_key FROM scan_aliases
+    WHERE business = ? AND department = ? AND normalized_raw_name = ?
+  `).bind(business, department, normalizedRawName).first();
+  if (!row) return null;
+  return {
+    employee: String(row.employee),
+    employeeKey: String(row.employee_key)
+  };
+}
+
+export async function createOrUpdateScanAlias(
+  env: Env,
+  business: string,
+  department: string,
+  rawName: string,
+  normalizedRawName: string,
+  employee: string,
+  employeeKey: string
+) {
+  const existing = await getScanAlias(env, business, department, normalizedRawName);
+  if (existing) {
+    await env.DB.prepare(`
+      UPDATE scan_aliases
+      SET correction_count = correction_count + 1, updated_at = datetime('now')
+      WHERE business = ? AND department = ? AND normalized_raw_name = ?
+    `).bind(business, department, normalizedRawName).run();
+  } else {
+    await env.DB.prepare(`
+      INSERT INTO scan_aliases (
+        id, business, department, raw_name, normalized_raw_name, employee, employee_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      crypto.randomUUID(),
+      business,
+      department,
+      rawName,
+      normalizedRawName,
+      employee,
+      employeeKey
+    ).run();
+  }
+}
+
+export async function createScanCorrection(
+  env: Env,
+  scanId: string,
+  rawEmployee: string,
+  suggestedEmployee: string | null,
+  finalEmployee: string,
+  business: string,
+  department: string
+) {
+  await env.DB.prepare(`
+    INSERT INTO scan_corrections (
+      id, scan_id, raw_employee, suggested_employee, final_employee, business, department
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    crypto.randomUUID(),
+    scanId,
+    rawEmployee,
+    suggestedEmployee,
+    finalEmployee,
+    business,
+    department
+  ).run();
+}
+

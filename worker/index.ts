@@ -12,6 +12,7 @@ import {
   updateStaff
 } from './db';
 import { exportReport } from './report';
+import { processScanRequest } from './scan-shifts';
 import { normalizePersonName } from './staff-config';
 
 function json(data: unknown, status = 200) {
@@ -156,6 +157,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       const input = parseStaff(await readJson(request));
       const created = await createStaff(env, input);
       await logAudit(env, 'create', 'staff_member', created.id, created, email);
+      ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
       return json(created, 201);
     }
 
@@ -166,6 +168,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       const updated = await updateStaff(env, id, patch);
       if (!updated) return json({ error: 'Mitarbeiter nicht gefunden.' }, 404);
       await logAudit(env, 'update', 'staff_member', id, patch, email);
+      ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
       return json(updated);
     }
 
@@ -184,6 +187,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       if (duplicate.length) return json({ error: 'Diese Schicht wurde bereits erfasst.' }, 409);
       const created = await createShift(env, input);
       await logAudit(env, 'create', 'shift', created.id, created, email);
+      ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
       return json(created, 201);
     }
 
@@ -192,6 +196,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       const shifts = (body.shifts || []).map(parseShift);
       const result = await bulkCreateShifts(env, shifts);
       await logAudit(env, 'bulk_create', 'shift', null, { count: shifts.length }, email);
+      ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
       return json(result, 201);
     }
 
@@ -209,6 +214,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
         text: requireString(body.text, 'Hinweis')
       });
       await logAudit(env, 'create', 'hinweis', created.id, created, email);
+      ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
       return json(created, 201);
     }
 
@@ -227,9 +233,38 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     }
 
     if (url.pathname === '/api/scan-shifts' && method === 'POST') {
-      return json({
-        error: 'Foto-Scan wird in Phase 2 an Cloudflare Workers AI oder ein anderes Modell angeschlossen.'
-      }, 501);
+      const body = await readJson<{
+        business?: string;
+        todayIso?: string;
+        staffConfig?: Record<string, Record<string, string[]>>;
+        images?: string[];
+      }>(request);
+      
+      const business = requireString(body.business, 'business') as 'Shiraz' | 'Djadoo' | 'Catering';
+      const todayIso = requireString(body.todayIso, 'todayIso');
+      const staffConfig = body.staffConfig || {};
+      const images = Array.isArray(body.images) ? body.images : [];
+
+      if (images.length === 0) {
+        return json({ error: 'Keine Bilder bereitgestellt.' }, 400);
+      }
+      if (images.length > 50) {
+        return json({ error: 'Maximum 50 Bilder pro Scan.' }, 400);
+      }
+
+      const result = await processScanRequest(env, {
+        business,
+        todayIso,
+        staffConfig,
+        images
+      }, email);
+
+      await logAudit(env, 'scan_shifts', 'scan_history', result.scanId, {
+        imageCount: images.length,
+        shiftCount: result.shifts.length
+      }, email);
+
+      return json(result, 201);
     }
 
     if (url.pathname.startsWith('/api/voice/')) {

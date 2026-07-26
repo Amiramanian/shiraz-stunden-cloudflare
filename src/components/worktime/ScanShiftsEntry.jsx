@@ -1,91 +1,115 @@
 import React, { useRef, useState } from 'react';
-import { Camera, Loader2, Check, X, Trash2, RotateCcw } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import { Camera, Loader2, Check, X, Trash2, RotateCcw, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { calculateDurationHours, normalizeTimeString } from '@/lib/timeUtils';
-import { buildStaffDirectoryText, resolveShiftMatch } from '@/lib/shiftMatching';
-
-// Read a File as a downscaled JPEG data URL so we can send images straight to the
-// FreeModel backend function — no Base44 UploadFile needed (saves 1 credit per photo).
-function fileToScaledDataUrl(file, maxDim = 1280, quality = 0.85) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-        const w = Math.round(img.width * scale);
-        const h = Math.round(img.height * scale);
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+import { buildEffectiveStaffConfig } from '@/lib/staffConfig';
+import { preprocessImage, runLocalOCR, validateImage } from '@/lib/ocr';
 
 export default function ScanShiftsEntry({ business, staffConfig, todayIso, onConfirmAll, onBack }) {
   const [status, setStatus] = useState('idle'); // idle | processing | preview | error | success
   const [errorMsg, setErrorMsg] = useState('');
   const [rows, setRows] = useState([]);
+  const [selectedRows, setSelectedRows] = useState(new Set());
+  const [processingDetails, setProcessingDetails] = useState('');
   const fileInputRef = useRef(null);
+
+  // Map staffConfig to backend format
+  const staffConfigForBackend = buildEffectiveStaffConfig(
+    Object.entries(staffConfig[business] || {}).flatMap(([dept, employees]) =>
+      employees.map(emp => ({
+        business,
+        department: dept,
+        employee: emp,
+        employeeKey: emp.toLowerCase().replace(/\s+/g, '').replace(/[.-]/g, '')
+      }))
+    )
+  );
 
   async function handleFiles(e) {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+
     setStatus('processing');
     setErrorMsg('');
+    setProcessingDetails('');
+    setRows([]);
+    setSelectedRows(new Set());
+
     try {
-      const directory = buildStaffDirectoryText(staffConfig);
-      const images = await Promise.all(files.map(fileToScaledDataUrl));
-      const result = await base44.functions.invoke('scanShiftsWithFreeModel', {
-        business,
-        todayIso,
-        directory,
-        images
-      });
+      setProcessingDetails('Bilder werden vorverarbeitet...');
 
-      const parsedRows = (result.shifts || []).map((item, idx) => {
-        const match = resolveShiftMatch(item, staffConfig);
-        let normStart = item.startTime;
-        let normEnd = item.endTime;
-        let duration = null;
-        try {
-          normStart = normalizeTimeString(item.startTime);
-          normEnd = normalizeTimeString(item.endTime);
-          duration = calculateDurationHours(normStart, normEnd);
-        } catch {
-          // keep raw values, user corrects in the preview table
+      // Validate and preprocess images
+      const processedImages = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const validError = validateImage(file);
+        if (validError) {
+          throw new Error(`${file.name}: ${validError}`);
         }
-        return {
-          _key: idx,
-          business: match.business,
-          department: match.department,
-          employee: match.employee || item.employee,
-          date: item.date,
-          startTime: normStart,
-          endTime: normEnd,
-          duration
-        };
+
+        setProcessingDetails(`Bild ${i + 1}/${files.length} wird vorverarbeitet...`);
+        const preprocessed = await preprocessImage(file);
+        processedImages.push(preprocessed);
+      }
+
+      setProcessingDetails('OCR wird ausgeführt (lokal)...');
+
+      // Run local OCR
+      const ocrResults = [];
+      for (let i = 0; i < processedImages.length; i++) {
+        setProcessingDetails(`OCR ${i + 1}/${processedImages.length}...`);
+        const ocrText = await runLocalOCR(processedImages[i]);
+        ocrResults.push(ocrText);
+      }
+
+      setProcessingDetails('KI-Analyse wird durchgeführt...');
+
+      // Call backend with processed images
+      const response = await fetch('/api/scan-shifts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          business,
+          todayIso,
+          staffConfig: staffConfigForBackend,
+          images: processedImages
+        })
       });
 
-      if (parsedRows.length === 0) {
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Server error: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (!result.shifts || result.shifts.length === 0) {
         setErrorMsg('Keine Schichten auf den Bildern erkannt.');
         setStatus('error');
         return;
       }
 
-      setRows(parsedRows);
+      // Transform result for preview display
+      const previewRows = result.shifts.map((item, idx) => ({
+        _key: idx,
+        _checked: true,
+        _source: item.source || 'freemodel',
+        _confidence: item.confidence || 0.8,
+        business: item.matchedBusiness || business,
+        department: item.matchedDepartment || item.department || '',
+        employee: item.matchedEmployee || item.employee,
+        date: item.date,
+        startTime: item.normalizedStart,
+        endTime: item.normalizedEnd,
+        duration: calculateDurationHours(item.normalizedStart, item.normalizedEnd)
+      }));
+
+      setRows(previewRows);
+      setSelectedRows(new Set(previewRows.map((_, idx) => idx)));
       setStatus('preview');
+      setProcessingDetails('');
     } catch (err) {
       console.error('Scan error:', err);
-      setErrorMsg('Konnte die Bilder nicht verarbeiten: ' + (err?.message || err));
+      setErrorMsg('Verarbeitung fehlgeschlagen: ' + (err?.message || err));
       setStatus('error');
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -93,235 +117,352 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
   }
 
   function updateRowField(key, field, value) {
-    setRows((prev) => prev.map((row) => {
-      if (row._key !== key) return row;
-      const next = { ...row, [field]: value };
-      if (field === 'business') {
-        const depts = Object.keys(staffConfig[value] || {});
-        next.department = depts[0] || '';
-        const emps = (staffConfig[value] || {})[next.department] || [];
-        next.employee = emps[0] || '';
-      }
-      if (field === 'department') {
-        const emps = (staffConfig[next.business] || {})[value] || [];
-        next.employee = emps[0] || '';
-      }
-      return next;
-    }));
-  }
-
-  function updateRowTime(key, field, value) {
-    setRows((prev) => prev.map((row) => {
-      if (row._key !== key) return row;
-      const next = { ...row, [field]: value };
-      try {
-        next.duration = calculateDurationHours(next.startTime, next.endTime);
-      } catch {
-        next.duration = null;
-      }
-      return next;
-    }));
-  }
-
-  function handleRowTimeBlur(key, field) {
-    setRows((prev) => prev.map((row) => {
-      if (row._key !== key || !row[field]) return row;
-      try {
-        const normalized = normalizeTimeString(row[field]);
-        const next = { ...row, [field]: normalized };
-        try {
-          next.duration = calculateDurationHours(next.startTime, next.endTime);
-        } catch {
-          next.duration = null;
-        }
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row._key !== key) return row;
+        const next = { ...row, [field]: value };
         return next;
-      } catch {
-        return row;
-      }
-    }));
+      })
+    );
   }
 
-  function removeRow(key) {
+  function deleteRow(key) {
     setRows((prev) => prev.filter((row) => row._key !== key));
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
   }
 
-  async function handleConfirmAll() {
-    const validRows = rows.filter((r) => r.duration !== null);
-    if (validRows.length === 0) return;
-    setStatus('processing');
+  function toggleRow(key) {
+    setSelectedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }
+
+  function selectAll() {
+    setSelectedRows(new Set(rows.map((row) => row._key)));
+  }
+
+  function deselectAll() {
+    setSelectedRows(new Set());
+  }
+
+  function addRow() {
+    const newKey = Math.max(...rows.map((r) => r._key), -1) + 1;
+    setRows((prev) => [
+      ...prev,
+      {
+        _key: newKey,
+        _checked: true,
+        _source: 'manual',
+        _confidence: 1.0,
+        business,
+        department: '',
+        employee: '',
+        date: todayIso,
+        startTime: '',
+        endTime: '',
+        duration: null
+      }
+    ]);
+  }
+
+  async function saveSelected() {
+    const selectedShifts = rows.filter((row) => selectedRows.has(row._key));
+
+    if (selectedShifts.length === 0) {
+      setErrorMsg('Bitte wählen Sie mindestens eine Schicht aus.');
+      return;
+    }
+
     try {
-      await onConfirmAll(validRows.map((r) => ({
-        business: r.business,
-        department: r.department,
-        employee: r.employee,
-        date: r.date,
-        startTime: r.startTime,
-        endTime: r.endTime,
-        durationHours: r.duration
-      })));
+      setStatus('processing');
+      setProcessingDetails(`${selectedShifts.length} Schichten werden gespeichert...`);
+
+      const response = await fetch('/api/shifts/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shifts: selectedShifts.map((row) => ({
+            business: row.business,
+            department: row.department,
+            employee: row.employee,
+            employeeKey: row.employee.toLowerCase().replace(/\s+/g, ''),
+            date: row.date,
+            startTime: row.startTime,
+            endTime: row.endTime,
+            durationHours: row.duration
+          }))
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Fehler beim Speichern');
+      }
+
       setStatus('success');
-      setTimeout(() => reset(), 1500);
+      setProcessingDetails(`${selectedShifts.length} Schichten gespeichert`);
+
+      setTimeout(() => {
+        onConfirmAll(selectedShifts);
+      }, 1500);
     } catch (err) {
-      setErrorMsg('Fehler beim Speichern: ' + err.message);
+      setErrorMsg('Fehler beim Speichern: ' + (err?.message || err));
       setStatus('error');
     }
   }
 
-  function reset() {
-    setRows([]);
-    setErrorMsg('');
-    setStatus('idle');
+  function getConfidenceColor(confidence) {
+    if (confidence >= 0.9) return 'bg-green-100 text-green-800';
+    if (confidence >= 0.7) return 'bg-yellow-100 text-yellow-800';
+    return 'bg-red-100 text-red-800';
   }
 
-  return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-bold text-center text-neutral-800">Schichtplan scannen — {business}</h2>
+  function getSourceLabel(source) {
+    return source === 'manual' ? 'Manuell' : source === 'ocr' ? 'OCR' : 'KI';
+  }
 
-      {status === 'idle' && (
-        <div className="space-y-3">
+  if (status === 'idle' || status === 'processing') {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 px-6">
+        {status === 'idle' ? (
+          <>
+            <div className="bg-blue-50 rounded-full p-6 mb-6">
+              <Camera className="w-12 h-12 text-blue-600" />
+            </div>
+            <h2 className="text-2xl font-bold mb-2">Schichten scannen</h2>
+            <p className="text-neutral-600 mb-6 text-center">
+              Laden Sie Fotos von Schichtplänen hoch. Verwendet werden lokale OCR und KI-Analyse.
+            </p>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="bg-blue-600 text-white px-8 py-3 rounded-lg font-medium hover:bg-blue-700 transition"
+            >
+              Bilder auswählen
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*"
+              onChange={handleFiles}
+              className="hidden"
+            />
+          </>
+        ) : (
+          <>
+            <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-4" />
+            <p className="font-medium text-lg mb-2">Wird verarbeitet...</p>
+            <p className="text-neutral-600">{processingDetails}</p>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 px-6">
+        <div className="bg-red-50 rounded-full p-6 mb-6">
+          <AlertCircle className="w-12 h-12 text-red-600" />
+        </div>
+        <h2 className="text-2xl font-bold mb-2 text-red-900">Fehler</h2>
+        <p className="text-red-700 mb-6 text-center">{errorMsg}</p>
+        <div className="flex gap-3">
           <button
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full flex items-center justify-center gap-2 py-8 rounded-2xl bg-blue-800 text-white font-bold text-lg shadow-lg hover:bg-blue-700 active:scale-[0.98] transition"
-          >
-            <Camera size={28} /> Foto(s) auswählen
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={handleFiles}
-          />
-          <button
-            onClick={onBack}
-            className="w-full py-3 rounded-xl bg-neutral-200 text-neutral-700 font-medium hover:bg-neutral-300 transition"
+            onClick={() => {
+              setStatus('idle');
+              setErrorMsg('');
+            }}
+            className="bg-red-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-red-700 transition"
           >
             Zurück
           </button>
-        </div>
-      )}
-
-      {status === 'processing' && (
-        <div className="w-full flex items-center justify-center gap-2 py-8 text-neutral-600 font-semibold">
-          <Loader2 size={22} className="animate-spin" /> Wird verarbeitet...
-        </div>
-      )}
-
-      {status === 'preview' && (
-        <div className="space-y-3">
-          <p className="text-xs text-neutral-500 text-center">Bitte prüfen und bei Bedarf korrigieren:</p>
-          <div className="space-y-3 max-h-[60vh] overflow-y-auto">
-            {rows.map((row) => {
-              const departments = Object.keys(staffConfig[row.business] || {});
-              const employees = (staffConfig[row.business] || {})[row.department] || [];
-              return (
-                <div key={row._key} className="bg-neutral-50 rounded-xl p-3 text-sm space-y-2 relative">
-                  <button
-                    onClick={() => removeRow(row._key)}
-                    className="absolute top-2 right-2 text-red-500 hover:text-red-700"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                  <div className="pr-6">
-                    <label className="block text-xs font-semibold text-neutral-500 mb-1">Abteilung</label>
-                    <select
-                      value={row.department}
-                      onChange={(e) => updateRowField(row._key, 'department', e.target.value)}
-                      className="w-full px-2 py-2 rounded-lg border border-neutral-200 bg-white text-neutral-900"
-                    >
-                      {departments.map((d) => <option key={d} value={d}>{d}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-neutral-500 mb-1">Mitarbeiter</label>
-                    <select
-                      value={row.employee}
-                      onChange={(e) => updateRowField(row._key, 'employee', e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg border border-neutral-200 bg-white text-neutral-900"
-                    >
-                      {employees.map((e) => <option key={e} value={e}>{e}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-neutral-500 mb-1">Datum</label>
-                    <input
-                      type="date"
-                      value={row.date}
-                      onChange={(e) => setRows((prev) => prev.map((r) => r._key === row._key ? { ...r, date: e.target.value } : r))}
-                      className="w-full px-3 py-2 rounded-lg border border-neutral-200 bg-white text-neutral-900"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <div className="flex-1">
-                      <label className="block text-xs font-semibold text-neutral-500 mb-1">In</label>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={row.startTime}
-                        onChange={(e) => updateRowTime(row._key, 'startTime', e.target.value)}
-                        onBlur={() => handleRowTimeBlur(row._key, 'startTime')}
-                        className="w-full px-3 py-2 rounded-lg border border-neutral-200 bg-white text-neutral-900 text-center"
-                      />
-                    </div>
-                    <div className="flex-1">
-                      <label className="block text-xs font-semibold text-neutral-500 mb-1">Out</label>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={row.endTime}
-                        onChange={(e) => updateRowTime(row._key, 'endTime', e.target.value)}
-                        onBlur={() => handleRowTimeBlur(row._key, 'endTime')}
-                        className="w-full px-3 py-2 rounded-lg border border-neutral-200 bg-white text-neutral-900 text-center"
-                      />
-                    </div>
-                  </div>
-                  {row.duration !== null ? (
-                    <div className="text-center font-bold text-emerald-700 pt-1">
-                      Sum: {row.duration.toFixed(2)} Stunden
-                    </div>
-                  ) : (
-                    <div className="text-center font-semibold text-red-500 pt-1 text-xs">
-                      Ungültige Zeit — bitte korrigieren
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={handleConfirmAll}
-              disabled={rows.length === 0 || rows.every((r) => r.duration === null)}
-              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-800 text-white font-bold hover:bg-emerald-700 disabled:opacity-60 transition"
-            >
-              <Check size={18} /> Alle bestätigen ({rows.filter((r) => r.duration !== null).length})
-            </button>
-            <button
-              onClick={reset}
-              className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-neutral-200 text-neutral-700 font-medium hover:bg-neutral-300 transition"
-            >
-              <RotateCcw size={18} /> Erneut
-            </button>
-          </div>
-        </div>
-      )}
-
-      {status === 'success' && (
-        <div className="text-center font-semibold text-green-600 py-4">Alle Schichten gespeichert ✅</div>
-      )}
-
-      {status === 'error' && (
-        <div className="space-y-2">
-          <div className="text-center font-semibold text-red-600 text-sm">{errorMsg}</div>
           <button
-            onClick={reset}
-            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-neutral-200 text-neutral-700 font-medium hover:bg-neutral-300 transition"
+            onClick={onBack}
+            className="bg-neutral-300 text-neutral-800 px-6 py-2 rounded-lg font-medium hover:bg-neutral-400 transition"
           >
-            <X size={18} /> Abbrechen
+            Abbrechen
           </button>
         </div>
+      </div>
+    );
+  }
+
+  if (status === 'success') {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 px-6">
+        <div className="bg-green-50 rounded-full p-6 mb-6">
+          <CheckCircle2 className="w-12 h-12 text-green-600" />
+        </div>
+        <h2 className="text-2xl font-bold mb-2 text-green-900">Erfolg!</h2>
+        <p className="text-green-700 mb-6 text-center">{processingDetails}</p>
+      </div>
+    );
+  }
+
+  // Preview mode
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between mb-6 pb-4 border-b">
+        <h2 className="text-2xl font-bold">Vorschau ({rows.length} Schichten)</h2>
+      </div>
+
+      {errorMsg && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4 text-red-700">
+          {errorMsg}
+        </div>
       )}
+
+      {/* Controls */}
+      <div className="flex flex-wrap gap-2 mb-6 pb-6 border-b">
+        <button
+          onClick={selectAll}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition"
+        >
+          Alle auswählen
+        </button>
+        <button
+          onClick={deselectAll}
+          className="bg-neutral-300 text-neutral-800 px-4 py-2 rounded-lg text-sm font-medium hover:bg-neutral-400 transition"
+        >
+          Auswahl aufheben
+        </button>
+        <button
+          onClick={addRow}
+          className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition"
+        >
+          + Zeile hinzufügen
+        </button>
+        <button
+          onClick={() => {
+            setStatus('idle');
+            setRows([]);
+            setSelectedRows(new Set());
+          }}
+          className="bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-700 transition"
+        >
+          Erneut scannen
+        </button>
+      </div>
+
+      {/* Shifts table */}
+      <div className="flex-1 overflow-auto mb-6">
+        <div className="space-y-3">
+          {rows.map((row) => (
+            <div
+              key={row._key}
+              className="bg-white border border-neutral-200 rounded-lg p-4 flex items-center gap-4"
+            >
+              <input
+                type="checkbox"
+                checked={selectedRows.has(row._key)}
+                onChange={() => toggleRow(row._key)}
+                className="w-5 h-5 rounded accent-blue-600"
+              />
+
+              {/* Confidence badge */}
+              <div
+                className={`px-2 py-1 rounded text-xs font-medium whitespace-nowrap ${getConfidenceColor(row._confidence)}`}
+              >
+                {Math.round(row._confidence * 100)}%
+              </div>
+
+              {/* Source badge */}
+              <div className="px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-800 whitespace-nowrap">
+                {getSourceLabel(row._source)}
+              </div>
+
+              {/* Editable fields */}
+              <div className="flex-1 grid grid-cols-4 gap-2 text-sm">
+                <select
+                  value={row.department}
+                  onChange={(e) => updateRowField(row._key, 'department', e.target.value)}
+                  className="border rounded px-2 py-1"
+                >
+                  <option value="">Abt. wählen</option>
+                  {Object.keys(staffConfig[business] || {}).map((dept) => (
+                    <option key={dept} value={dept}>
+                      {dept}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={row.employee}
+                  onChange={(e) => updateRowField(row._key, 'employee', e.target.value)}
+                  className="border rounded px-2 py-1"
+                >
+                  <option value="">MA wählen</option>
+                  {(staffConfig[business]?.[row.department] || []).map((emp) => (
+                    <option key={emp} value={emp}>
+                      {emp}
+                    </option>
+                  ))}
+                </select>
+
+                <input
+                  type="date"
+                  value={row.date}
+                  onChange={(e) => updateRowField(row._key, 'date', e.target.value)}
+                  className="border rounded px-2 py-1"
+                />
+
+                <div className="flex gap-1">
+                  <input
+                    type="time"
+                    value={row.startTime}
+                    onChange={(e) => updateRowField(row._key, 'startTime', e.target.value)}
+                    className="border rounded px-2 py-1 flex-1"
+                    placeholder="Start"
+                  />
+                  <input
+                    type="time"
+                    value={row.endTime}
+                    onChange={(e) => updateRowField(row._key, 'endTime', e.target.value)}
+                    className="border rounded px-2 py-1 flex-1"
+                    placeholder="Ende"
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={() => deleteRow(row._key)}
+                className="text-red-600 hover:text-red-700 p-1"
+              >
+                <Trash2 className="w-5 h-5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Footer buttons */}
+      <div className="flex gap-3 pt-4 border-t">
+        <button
+          onClick={saveSelected}
+          disabled={selectedRows.size === 0}
+          className="flex-1 bg-green-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-green-700 disabled:bg-neutral-300 transition"
+        >
+          <Check className="w-5 h-5 inline mr-2" />
+          {selectedRows.size} Schichten speichern
+        </button>
+        <button
+          onClick={onBack}
+          className="bg-neutral-300 text-neutral-800 px-6 py-3 rounded-lg font-medium hover:bg-neutral-400 transition"
+        >
+          Abbrechen
+        </button>
+      </div>
     </div>
   );
 }
