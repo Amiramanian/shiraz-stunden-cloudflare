@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { Camera, Loader2, Check, X, Trash2, RotateCcw, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { calculateDurationHours, normalizeTimeString } from '@/lib/timeUtils';
+import { Camera, Loader2, Check, Trash2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { calculateDurationHours } from '@/lib/timeUtils';
 import { buildEffectiveStaffConfig } from '@/lib/staffConfig';
 import { preprocessImage, runLocalOCR, validateImage } from '@/lib/ocr';
 
