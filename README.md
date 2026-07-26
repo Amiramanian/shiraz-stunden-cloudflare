@@ -124,7 +124,7 @@ A new AI-powered photo scan feature allows users to upload shift schedule photos
 ```bash
 FREEMODEL_API_KEY=your-api-key
 FREEMODEL_MODEL=your-model-name
-FREEMODEL_BASE_URL=https://api.freemodel.example.com/v1/messages
+FREEMODEL_BASE_URL=https://api.your-freemodel-provider.com/v1/messages
 ```
 
 2. Apply new D1 migration:

@@ -143,8 +143,8 @@ export async function processScanRequest(
     if (!request.images || request.images.length === 0) {
       throw new Error('No images provided');
     }
-    if (request.images.length > 50) {
-      throw new Error('Maximum 50 images per scan');
+    if (request.images.length > 5) {
+      throw new Error('Maximum 5 images per scan');
     }
 
     // Validate image MIME types and size
@@ -156,8 +156,8 @@ export async function processScanRequest(
       if (!image.startsWith('data:image/')) {
         throw new Error(`Image ${i} has invalid MIME type`);
       }
-      if (image.length > 15 * 1024 * 1024) {
-        throw new Error(`Image ${i} exceeds 15MB size limit`);
+      if (image.length > 8 * 1024 * 1024) {
+        throw new Error(`Image ${i} exceeds 8MB size limit`);
       }
     }
 
@@ -213,8 +213,8 @@ ${buildStaffDirectoryText({ [request.business]: request.staffConfig[request.busi
     if (!Array.isArray(aiShifts)) {
       throw new Error('Invalid FreeModel response');
     }
-    if (aiShifts.length > 1000) {
-      throw new Error('Too many shifts detected (maximum 1000)');
+    if (aiShifts.length > 150) {
+      throw new Error('Too many shifts detected (maximum 150)');
     }
 
     // Update scan history with AI response

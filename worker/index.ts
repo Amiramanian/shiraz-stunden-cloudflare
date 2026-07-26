@@ -248,8 +248,8 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       if (images.length === 0) {
         return json({ error: 'Keine Bilder bereitgestellt.' }, 400);
       }
-      if (images.length > 50) {
-        return json({ error: 'Maximum 50 Bilder pro Scan.' }, 400);
+      if (images.length > 5) {
+        return json({ error: 'Maximum 5 Bilder pro Scan.' }, 400);
       }
 
       const result = await processScanRequest(env, {
