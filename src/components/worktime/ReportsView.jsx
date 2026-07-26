@@ -54,7 +54,13 @@ export default function ReportsView({ onBack }) {
       setMessage('Die Datei „کارکنان“ wurde aktualisiert.');
       await load();
     } catch (error) {
-      setMessage(`Fehler: ${error.message}`);
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      setMessage(
+        /429|RESOURCE_EXHAUSTED|Quota exceeded/i.test(rawMessage)
+          ? 'Google-Limit wurde kurz erreicht. Die Anwendung versucht es automatisch erneut; bitte nicht mehrfach klicken.'
+          : `Fehler: ${rawMessage}`
+      );
+      await load();
     } finally {
       setRefreshing(false);
     }

@@ -77,18 +77,43 @@ async function getGoogleAccessToken(env: Env): Promise<string> {
   return tokenCache.token;
 }
 
+function wait(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 async function googleFetch<T>(env: Env, url: string, init: RequestInit = {}): Promise<T> {
-  const token = await getGoogleAccessToken(env);
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...(init.headers || {})
+  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+  const maxAttempts = 6;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const token = await getGoogleAccessToken(env);
+    const response = await fetch(url, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...(init.headers || {})
+      }
+    });
+
+    if (response.ok) return response.json() as Promise<T>;
+
+    const responseText = await response.text();
+    if (!retryableStatuses.has(response.status) || attempt === maxAttempts - 1) {
+      throw new Error(`Google Sheets API ${response.status}: ${responseText}`);
     }
-  });
-  if (!response.ok) throw new Error(`Google Sheets API ${response.status}: ${await response.text()}`);
-  return response.json() as Promise<T>;
+
+    const retryAfterHeader = response.headers.get('Retry-After');
+    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : Number.NaN;
+    const exponentialDelay = Math.min(64_000, 1_000 * (2 ** attempt));
+    const jitter = Math.floor(Math.random() * 1_000);
+    const delay = Number.isFinite(retryAfterSeconds)
+      ? Math.max(exponentialDelay, retryAfterSeconds * 1_000)
+      : exponentialDelay + jitter;
+    await wait(delay);
+  }
+
+  throw new Error('Google Sheets API request failed after retries.');
 }
 
 function escapeSheetTitle(title: string) {
@@ -318,17 +343,23 @@ export async function updateGoogleSpreadsheet(env: Env, plans: SheetPlan[]) {
 
   const sheetIdByTitle = new Map(metadata.sheets.map((sheet) => [sheet.properties.title, sheet.properties.sheetId]));
 
-  for (const plan of plans) {
-    const range = escapeSheetTitle(plan.title);
-    await googleFetch(env, `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}:clear`, {
-      method: 'POST',
-      body: '{}'
-    });
-    await googleFetch(env, `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(`${range}!A1`)}?valueInputOption=USER_ENTERED`, {
-      method: 'PUT',
-      body: JSON.stringify({ range: `${range}!A1`, majorDimension: 'ROWS', values: plan.values })
-    });
-  }
+  const clearRanges = plans.map((plan) => escapeSheetTitle(plan.title));
+  await googleFetch(env, `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchClear`, {
+    method: 'POST',
+    body: JSON.stringify({ ranges: clearRanges })
+  });
+
+  await googleFetch(env, `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      valueInputOption: 'USER_ENTERED',
+      data: plans.map((plan) => ({
+        range: `${escapeSheetTitle(plan.title)}!A1`,
+        majorDimension: 'ROWS',
+        values: plan.values
+      }))
+    })
+  });
 
   const formattingRequests: Record<string, unknown>[] = [];
   for (const plan of plans) {
