@@ -5,9 +5,10 @@ GOOGLE_SPREADSHEET_ID=your_google_sheet_id
 GOOGLE_SHEET_URL=https://docs.google.com/spreadsheets/d/your_google_sheet_id/edit
 
 # FreeModel AI Integration (for schedule scanning with OCR)
-FREEMODEL_API_KEY=replace-with-freemodel-api-key
-FREEMODEL_MODEL=replace-with-model-name
-FREEMODEL_BASE_URL=https://api.your-freemodel-provider.com/v1/messages
+# Create a free account at https://freemodel.dev
+FREEMODEL_API_KEY=your-freemodel-api-key
+FREEMODEL_BASE_URL=https://api.freemodel.dev/v1
+FREEMODEL_MODEL=auto
 
 # Optional
 APP_TIMEZONE=Europe/Berlin

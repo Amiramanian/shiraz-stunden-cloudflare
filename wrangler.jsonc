@@ -24,6 +24,8 @@
   "vars": {
     "APP_TIMEZONE": "Europe/Berlin",
     "GOOGLE_SPREADSHEET_ID": "1XmfVLnebQ7NdLV2qh2nJ_qgPQPIQdqkgw178ZfCyyuY",
-    "GOOGLE_SHEET_URL": "https://docs.google.com/spreadsheets/d/1XmfVLnebQ7NdLV2qh2nJ_qgPQPIQdqkgw178ZfCyyuY/edit"
+    "GOOGLE_SHEET_URL": "https://docs.google.com/spreadsheets/d/1XmfVLnebQ7NdLV2qh2nJ_qgPQPIQdqkgw178ZfCyyuY/edit",
+    "FREEMODEL_BASE_URL": "https://api.freemodel.dev/v1",
+    "FREEMODEL_MODEL": "auto"
   }
 }

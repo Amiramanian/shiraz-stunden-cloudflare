@@ -41,9 +41,13 @@ async function callFreeModel(
   baseUrl: string,
   model: string
 ): Promise<ScannedShiftRaw[]> {
+  // Construct full OpenAI-compatible endpoint URL
+  const endpoint = `${baseUrl}/chat/completions`;
+
+  // Convert images to OpenAI-compatible format (base64 data URLs)
   const imageObjects = images.map((dataUrl) => ({
-    type: 'image',
-    source: { type: 'base64', media_type: 'image/jpeg', data: dataUrl.replace(/^data:image\/jpeg;base64,/, '') }
+    type: 'image_url',
+    image_url: { url: dataUrl }
   }));
 
   const systemPrompt = `You are an expert schedule scanner. Extract shift information from schedule images.
@@ -70,7 +74,7 @@ ${staffDirectory}
 
 Extract all shifts visible in the provided schedule image(s). Use the staff directory to match employee names when possible. Return only the JSON structure, no other text.`;
 
-  const response = await fetch(baseUrl, {
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,

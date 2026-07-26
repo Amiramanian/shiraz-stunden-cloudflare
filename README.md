@@ -122,10 +122,12 @@ A new AI-powered photo scan feature allows users to upload shift schedule photos
 1. Copy `.dev.vars.example` to `.dev.vars` and fill in FreeModel credentials:
 
 ```bash
-FREEMODEL_API_KEY=your-api-key
-FREEMODEL_MODEL=your-model-name
-FREEMODEL_BASE_URL=https://api.your-freemodel-provider.com/v1/messages
+FREEMODEL_API_KEY=your-freemodel-api-key
+FREEMODEL_BASE_URL=https://api.freemodel.dev/v1
+FREEMODEL_MODEL=auto
 ```
+
+Get a free API key from [freemodel.dev](https://freemodel.dev).
 
 2. Apply new D1 migration:
 
@@ -213,6 +215,26 @@ Once a user corrects an employee name during preview, the mapping is learned:
 - Raw name + department → staff name
 - Fuzzy matching improves on retry
 - Corrections tracked in scan_corrections table
+
+### Environment Configuration
+
+**Local Development** (`.dev.vars`):
+- `FREEMODEL_API_KEY` = your API key from freemodel.dev
+- `GOOGLE_CLIENT_EMAIL` = service account email
+- `GOOGLE_PRIVATE_KEY` = full private key with newlines
+- `GOOGLE_SPREADSHEET_ID` = spreadsheet ID (optional if in wrangler.jsonc)
+
+**Cloudflare Secrets** (Encrypt & store in Cloudflare):
+- `FREEMODEL_API_KEY` – FreeModel authentication token
+- `GOOGLE_CLIENT_EMAIL` – Google service account email
+- `GOOGLE_PRIVATE_KEY` – Google service account private key (full PEM format)
+
+**Cloudflare Variables** (Non-secret, in wrangler.jsonc):
+- `FREEMODEL_BASE_URL` = `https://api.freemodel.dev/v1`
+- `FREEMODEL_MODEL` = `auto`
+- `GOOGLE_SPREADSHEET_ID` = Spreadsheet ID
+- `GOOGLE_SHEET_URL` = Spreadsheet URL
+- `APP_TIMEZONE` = `Europe/Berlin` (optional)
 
 ### Troubleshooting
 
