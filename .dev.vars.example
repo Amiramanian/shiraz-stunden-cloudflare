@@ -4,4 +4,12 @@ GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\
 GOOGLE_SPREADSHEET_ID=your_google_sheet_id
 GOOGLE_SHEET_URL=https://docs.google.com/spreadsheets/d/your_google_sheet_id/edit
 
-# Optional: AI endpoints will be added in a later phase.
+# FreeModel AI Integration (for schedule scanning with OCR)
+FREEMODEL_API_KEY=replace-with-freemodel-api-key
+FREEMODEL_MODEL=replace-with-model-name
+FREEMODEL_BASE_URL=https://api.freemodel.example.com/v1/messages
+
+# Optional
+APP_TIMEZONE=Europe/Berlin
+REQUIRE_ACCESS=false
+

@@ -139,15 +139,41 @@ export async function processScanRequest(
     // Create scan history entry
     await createScanHistory(env, scanId, request.business, actorEmail, request.images.length);
 
-    // Validate inputs
+    // Validate inputs with security limits
     if (!request.images || request.images.length === 0) {
       throw new Error('No images provided');
     }
     if (request.images.length > 50) {
       throw new Error('Maximum 50 images per scan');
     }
+
+    // Validate image MIME types and size
+    for (let i = 0; i < request.images.length; i++) {
+      const image = request.images[i];
+      if (typeof image !== 'string') {
+        throw new Error(`Image ${i} is not a string`);
+      }
+      if (!image.startsWith('data:image/')) {
+        throw new Error(`Image ${i} has invalid MIME type`);
+      }
+      if (image.length > 15 * 1024 * 1024) {
+        throw new Error(`Image ${i} exceeds 15MB size limit`);
+      }
+    }
+
     if (!request.staffConfig || !request.staffConfig[request.business]) {
       throw new Error('Invalid business or staff config');
+    }
+
+    // Validate business value
+    const validBusinesses = ['Shiraz', 'Djadoo', 'Catering'];
+    if (!validBusinesses.includes(request.business)) {
+      throw new Error('Invalid business value');
+    }
+
+    // Validate date format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(request.todayIso)) {
+      throw new Error('Invalid date format');
     }
 
     // Validate API keys
@@ -183,6 +209,14 @@ ${buildStaffDirectoryText({ [request.business]: request.staffConfig[request.busi
       env.FREEMODEL_MODEL
     );
 
+    // Validate AI response limits
+    if (!Array.isArray(aiShifts)) {
+      throw new Error('Invalid FreeModel response');
+    }
+    if (aiShifts.length > 1000) {
+      throw new Error('Too many shifts detected (maximum 1000)');
+    }
+
     // Update scan history with AI response
     await updateScanHistory(env, scanId, {
       aiResponseJson: JSON.stringify(aiShifts)
@@ -194,6 +228,17 @@ ${buildStaffDirectoryText({ [request.business]: request.staffConfig[request.busi
 
     const enrichedShifts = await Promise.all(
       aiShifts.map(async (shift) => {
+        // Validate shift data
+        if (typeof shift.employee !== 'string' || shift.employee.length === 0) {
+          throw new Error('Invalid employee name in AI response');
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(shift.date)) {
+          throw new Error('Invalid date in AI response');
+        }
+        if (!/^\d{2}:\d{2}$/.test(shift.startTime) || !/^\d{2}:\d{2}$/.test(shift.endTime)) {
+          throw new Error('Invalid time format in AI response');
+        }
+
         let normalizedStart: string;
         let normalizedEnd: string;
         try {
@@ -265,9 +310,15 @@ ${buildStaffDirectoryText({ [request.business]: request.staffConfig[request.busi
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    // Sanitize error message to avoid leaking secrets
+    const sanitizedMessage = message
+      .replace(/Bearer\s+[^\s]+/g, '[REDACTED]')
+      .replace(/sk_[^\s]+/g, '[REDACTED]')
+      .slice(0, 2000);
+
     await updateScanHistory(env, scanId, {
       status: 'error',
-      errorMessage: message.slice(0, 2000)
+      errorMessage: sanitizedMessage
     });
     throw error;
   }
