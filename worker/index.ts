@@ -11,12 +11,18 @@ import {
   createShift,
   createStaff,
   findDuplicateShifts,
+  getHinweis,
+  getShift,
   listHinweise,
   listShifts,
   listStaff,
   logAudit,
   recordScanCorrection,
+  softDeleteHinweis,
+  softDeleteShift,
+  updateHinweis,
   updateScanHistory,
+  updateShift,
   updateStaff
 } from './db';
 import { exportReport } from './report';
@@ -140,6 +146,16 @@ function parseShift(input: Partial<ShiftRecord>): Omit<ShiftRecord, 'id'> {
     startTime,
     endTime,
     durationHours: calculateDuration(startTime, endTime)
+  };
+}
+
+function parseHinweis(input: Partial<HinweisRecord>): Omit<HinweisRecord, 'id'> {
+  const employee = requireString(input.employee, 'Mitarbeiter');
+  return {
+    employee,
+    employeeKey: normalizePersonName(employee),
+    date: validateDate(input.date),
+    text: requireString(input.text, 'Hinweis')
   };
 }
 
@@ -273,6 +289,50 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       return json(created, 201);
     }
 
+    const shiftMatch = url.pathname.match(/^\/api\/shifts\/([^/]+)$/);
+    if (shiftMatch && method === 'PATCH') {
+      const id = decodeURIComponent(shiftMatch[1]);
+      const existing = await getShift(env, id);
+      if (!existing) return json({ error: 'Schicht nicht gefunden.' }, 404);
+
+      const patch = await readJson<Partial<ShiftRecord>>(request);
+      const input = parseShift({ ...existing, ...patch });
+      const duplicate = await findDuplicateShifts(env, input);
+      if (duplicate.some((shift) => shift.id !== id)) {
+        return json({ error: 'Diese Schicht wurde bereits erfasst.' }, 409);
+      }
+
+      const updated = await updateShift(env, id, input);
+      if (!updated) return json({ error: 'Schicht nicht gefunden.' }, 404);
+      await logAudit(env, 'update', 'shift', id, { before: existing, after: updated }, email);
+
+      try {
+        await exportReport(env, 'manual');
+        return json({ ...updated, excelSynced: true });
+      } catch (error) {
+        return json({ ...updated, excelSynced: false, syncError: sanitizeSyncError(error) });
+      }
+    }
+
+    if (shiftMatch && method === 'DELETE') {
+      const id = decodeURIComponent(shiftMatch[1]);
+      const deleted = await softDeleteShift(env, id);
+      if (!deleted) return json({ error: 'Schicht nicht gefunden.' }, 404);
+      await logAudit(env, 'delete', 'shift', id, { before: deleted }, email);
+
+      try {
+        await exportReport(env, 'manual');
+        return json({ deleted: true, record: deleted, excelSynced: true });
+      } catch (error) {
+        return json({
+          deleted: true,
+          record: deleted,
+          excelSynced: false,
+          syncError: sanitizeSyncError(error)
+        });
+      }
+    }
+
     if (url.pathname === '/api/shifts/bulk' && method === 'POST') {
       const body = await readJson<{
         shifts?: Array<Partial<ShiftRecord>>;
@@ -365,17 +425,49 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     }
 
     if (url.pathname === '/api/hinweise' && method === 'POST') {
-      const body = await readJson<Partial<HinweisRecord>>(request);
-      const employee = requireString(body.employee, 'Mitarbeiter');
-      const created = await createHinweis(env, {
-        employee,
-        employeeKey: body.employeeKey ? requireString(body.employeeKey, 'employeeKey') : normalizePersonName(employee),
-        date: validateDate(body.date),
-        text: requireString(body.text, 'Hinweis')
-      });
+      const created = await createHinweis(env, parseHinweis(await readJson(request)));
       await logAudit(env, 'create', 'hinweis', created.id, created, email);
       ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
       return json(created, 201);
+    }
+
+    const hinweisMatch = url.pathname.match(/^\/api\/hinweise\/([^/]+)$/);
+    if (hinweisMatch && method === 'PATCH') {
+      const id = decodeURIComponent(hinweisMatch[1]);
+      const existing = await getHinweis(env, id);
+      if (!existing) return json({ error: 'Hinweis nicht gefunden.' }, 404);
+
+      const patch = await readJson<Partial<HinweisRecord>>(request);
+      const input = parseHinweis({ ...existing, ...patch });
+      const updated = await updateHinweis(env, id, input);
+      if (!updated) return json({ error: 'Hinweis nicht gefunden.' }, 404);
+      await logAudit(env, 'update', 'hinweis', id, { before: existing, after: updated }, email);
+
+      try {
+        await exportReport(env, 'manual');
+        return json({ ...updated, excelSynced: true });
+      } catch (error) {
+        return json({ ...updated, excelSynced: false, syncError: sanitizeSyncError(error) });
+      }
+    }
+
+    if (hinweisMatch && method === 'DELETE') {
+      const id = decodeURIComponent(hinweisMatch[1]);
+      const deleted = await softDeleteHinweis(env, id);
+      if (!deleted) return json({ error: 'Hinweis nicht gefunden.' }, 404);
+      await logAudit(env, 'delete', 'hinweis', id, { before: deleted }, email);
+
+      try {
+        await exportReport(env, 'manual');
+        return json({ deleted: true, record: deleted, excelSynced: true });
+      } catch (error) {
+        return json({
+          deleted: true,
+          record: deleted,
+          excelSynced: false,
+          syncError: sanitizeSyncError(error)
+        });
+      }
     }
 
     if (url.pathname === '/api/report/link' && method === 'GET') {
