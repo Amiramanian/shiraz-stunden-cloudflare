@@ -1,6 +1,6 @@
 import Tesseract from 'tesseract.js';
 
-const MAX_IMAGE_COUNT = 5;
+const MAX_IMAGE_COUNT = 10;
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 
 /**
@@ -219,4 +219,47 @@ export function validateImages(files) {
   }
 
   return null;
+}
+
+/**
+ * Resizes an image for cloud handwriting recognition while preserving color.
+ * The local OCR variant above remains grayscale/contrast-enhanced.
+ */
+export async function prepareImageForCloud(file, maxDimension = 1920) {
+  if (!(file instanceof File || file instanceof Blob)) {
+    throw new Error('Invalid image file.');
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(new Error('The image could not be read.'));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error('The selected file is not a readable image.'));
+      image.onload = () => {
+        try {
+          const sourceWidth = image.naturalWidth || image.width;
+          const sourceHeight = image.naturalHeight || image.height;
+          const largestDimension = Math.max(sourceWidth, sourceHeight);
+          const scale = largestDimension > maxDimension
+            ? maxDimension / largestDimension
+            : 1;
+          const width = Math.max(1, Math.round(sourceWidth * scale));
+          const height = Math.max(1, Math.round(sourceHeight * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const context = canvas.getContext('2d');
+          if (!context) throw new Error('Could not initialize image processing.');
+          context.drawImage(image, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.92));
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+      image.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
 }

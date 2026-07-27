@@ -23,7 +23,7 @@ Independent migration of the previous Base44 work-time app to Cloudflare.
 - Google Sheets tab creation, data writing and formatting
 - Existing frontend flow migrated away from the Base44 SDK
 
-Photo scan and voice input intentionally return a clear “Phase 2” message until an AI provider is configured.
+Photo schedule scanning is implemented with local OCR, Cloudflare Workers AI, and optional Groq/FreeModel fallbacks. Voice input still returns a clear Phase 2 message.
 
 ## Google Sheet
 
@@ -91,43 +91,62 @@ A new AI-powered photo scan feature allows users to upload shift schedule photos
 ### How it works
 
 1. **Image Preprocessing** (Browser)
-   - Images are downscaled and converted to grayscale with contrast enhancement
-   - Canvas API processes images locally before sending to backend
+   - A color-preserving copy is downscaled for cloud handwriting recognition
+   - A second grayscale, contrast-enhanced copy is created for local OCR hints
+   - Canvas API processes both copies locally before sending to the backend
 
-2. **OCR Processing** (Browser, Local)
-   - Tesseract.js runs OCR locally in the browser
-   - German language recognition
-   - No third-party OCR service needed
+2. **OCR Processing**
+   - Tesseract.js runs optional German OCR locally in the browser
+   - Cloudflare Workers AI `toMarkdown` reads the original photographed handwriting
+   - Local OCR errors no longer block the cloud extraction path
 
 3. **AI Analysis** (Backend)
-   - Preprocessed images are sent to FreeModel API
-   - FreeModel extracts shift data with confidence scores
-   - Name matching against staff directory with fuzzy matching
+   - Cloud image transcription and optional local OCR are structured by Llama 3.3 70B
+   - The staff directory is never included in the extraction prompt, preventing roster hallucinations
+   - Only rows with a handwritten name, start time, end time, and row evidence are accepted
+   - The handwritten S./Summe value cross-checks the calculated duration
+   - Every uploaded image is independent; filenames are audit labels only and never influence extraction or dates
+   - Groq Qwen 3.6 is used when configured and the primary provider is unavailable
+   - FreeModel remains an optional final fallback
+   - Missing or invalid dates stay empty for review; they are never replaced with today's date
+   - Staff names are matched only after extraction, using aliases, exact matches, or strict fuzzy limits
 
 4. **Preview & Confirmation** (Browser)
    - All detected shifts shown with:
      - Confidence badge (green/yellow/red)
      - Source indicator (OCR/AI/Manual)
+     - Source image, row evidence, and written total
+     - Review reason for uncertain names, dates, handwriting, or hour mismatches
      - Editable fields for correction
-   - User selects which shifts to save
+     - Responsive cards, explicit 24-hour time fields, and the selected-hour total
+   - Only high-confidence rows are preselected
    - Manual rows can be added before saving
 
-5. **Background Export** (Worker)
+5. **Save, Learning, and Spreadsheet Sync** (Worker)
    - Confirmed shifts saved to D1 immediately
-   - Google Sheets export triggered asynchronously
-   - User is not blocked waiting for export
+   - Duplicate shifts are ignored safely
+   - User corrections are stored idempotently; name and department aliases are applied to later scans
+   - Google Sheets is updated before the save response returns, so no manual refresh/export is required
 
 ### Local Setup for Scanner
 
-1. Copy `.dev.vars.example` to `.dev.vars` and fill in FreeModel credentials:
+1. Copy `.dev.vars.example` to `.dev.vars`.
+
+Cloudflare Workers AI uses the `AI` binding and requires no API key. Groq and
+FreeModel are optional fallbacks:
 
 ```bash
+GROQ_API_KEY=your-groq-api-key
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_MODEL=qwen/qwen3.6-27b
+
 FREEMODEL_API_KEY=your-freemodel-api-key
 FREEMODEL_BASE_URL=https://api.freemodel.dev/v1
-FREEMODEL_MODEL=auto
+FREEMODEL_MODEL=gpt-5.6-sol
 ```
 
-Get a free API key from [freemodel.dev](https://freemodel.dev).
+Get a Groq key from [console.groq.com/keys](https://console.groq.com/keys).
+FreeModel can be configured from [freemodel.dev](https://freemodel.dev).
 
 2. Apply new D1 migration:
 
@@ -135,7 +154,8 @@ Get a free API key from [freemodel.dev](https://freemodel.dev).
 npm run db:migrate:local
 ```
 
-This creates three new tables:
+The migrations create three scanner tables and extend them with structured,
+idempotent correction memory:
 - `scan_aliases`: Learns employee name corrections for fuzzy matching
 - `scan_history`: Audit trail of all scan jobs
 - `scan_corrections`: Per-row corrections made during preview
@@ -163,7 +183,9 @@ Request:
       "Küche": ["Chef", "Sous Chef"]
     }
   },
-  "images": ["data:image/jpeg;base64,...", "data:image/jpeg;base64,..."]
+  "images": ["data:image/jpeg;base64,...", "data:image/jpeg;base64,..."],
+  "imageNames": ["optional-display-label.jpeg"],
+  "ocrTexts": ["local OCR text for image 1", "local OCR text for image 2"]
 }
 ```
 
@@ -171,6 +193,8 @@ Response:
 ```json
 {
   "scanId": "uuid",
+  "provider": "workers-ai",
+  "warnings": [],
   "shifts": [
     {
       "employee": "raw name from image",
@@ -179,11 +203,16 @@ Response:
       "startTime": "09:00",
       "endTime": "17:00",
       "confidence": 0.95,
-      "source": "freemodel",
+      "source": "workers-ai",
       "normalizedStart": "09:00",
       "normalizedEnd": "17:00",
       "matchedBusiness": "Shiraz",
-      "matchedDepartment": "Bar"
+      "matchedDepartment": "Bar",
+      "imageName": "1.jpeg",
+      "evidence": "Manager | 09:00 | 17:00 | 8",
+      "writtenHours": "8",
+      "needsReview": false,
+      "reviewReasons": []
     }
   ],
   "savedCount": 0,
@@ -193,54 +222,74 @@ Response:
 
 ### Security & Limits
 
-- Maximum 50 images per scan
-- Individual images limited to 15MB
-- Maximum 1000 shifts per response
-- Date/time format validation
+- Maximum 10 images per scan
+- Individual images limited to 8MB
+- Maximum 30 extracted rows per image
+- OCR text is limited per image and in total
+- Date normalization and per-row validation
 - Business value whitelisted
 - Error messages sanitized to avoid API key leakage
 - All requests logged to audit trail
 
-### FreeModel Fallback
+### Provider Fallback
 
-If FreeModel API is unavailable:
-- User gets clear error message
-- Scan is logged with error status
-- No partial data is saved
-- User can retry or enter manually
+Provider order:
+
+1. Cloudflare image-to-Markdown plus Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`)
+2. Groq (`qwen/qwen3.6-27b`) when `GROQ_API_KEY` is configured
+3. FreeModel when `FREEMODEL_API_KEY` is configured
+4. Manual preview row when all automatic providers are unavailable or no evidenced row is found
+
+Retryable provider failures are retried once before moving to the next
+provider. A valid zero-row result is trusted instead of asking later providers
+to invent data. Malformed rows are skipped, uncertain rows are left unselected,
+and warnings are shown in the preview.
 
 ### Learning Aliases
 
 Once a user corrects an employee name during preview, the mapping is learned:
-- Raw name + department → staff name
-- Fuzzy matching improves on retry
-- Corrections tracked in scan_corrections table
+- Raw name + raw department → corrected staff name + corrected department
+- Strict matching applies only after extraction
+- Date and time edits are retained in the structured correction history
+- Duplicate correction submissions do not increase the learning count twice
 
 ### Environment Configuration
 
 **Local Development** (`.dev.vars`):
-- `FREEMODEL_API_KEY` = your API key from freemodel.dev
 - `GOOGLE_CLIENT_EMAIL` = service account email
 - `GOOGLE_PRIVATE_KEY` = full private key with newlines
 - `GOOGLE_SPREADSHEET_ID` = spreadsheet ID (optional if in wrangler.jsonc)
+- `GROQ_API_KEY` = optional Groq fallback key
+- `FREEMODEL_API_KEY` = optional final fallback key
 
 **Cloudflare Secrets** (Encrypt & store in Cloudflare):
-- `FREEMODEL_API_KEY` – FreeModel authentication token
 - `GOOGLE_CLIENT_EMAIL` – Google service account email
 - `GOOGLE_PRIVATE_KEY` – Google service account private key (full PEM format)
+- `GROQ_API_KEY` – optional Groq authentication token
+- `FREEMODEL_API_KEY` – optional FreeModel authentication token
 
 **Cloudflare Variables** (Non-secret, in wrangler.jsonc):
+- `WORKERS_AI_MODEL` = `@cf/meta/llama-3.3-70b-instruct-fp8-fast` (conservative structured extraction)
+- `WORKERS_AI_VISION_MODEL` = `@cf/meta/llama-4-scout-17b-16e-instruct` (reserved vision model)
+- `GROQ_BASE_URL` = `https://api.groq.com/openai/v1`
+- `GROQ_MODEL` = `qwen/qwen3.6-27b`
 - `FREEMODEL_BASE_URL` = `https://api.freemodel.dev/v1`
-- `FREEMODEL_MODEL` = `auto`
+- `FREEMODEL_MODEL` = `gpt-5.6-sol`
 - `GOOGLE_SPREADSHEET_ID` = Spreadsheet ID
 - `GOOGLE_SHEET_URL` = Spreadsheet URL
 - `APP_TIMEZONE` = `Europe/Berlin` (optional)
 
 ### Troubleshooting
 
-**No FreeModel key configured:**
-- Add `FREEMODEL_API_KEY` to `.dev.vars`
-- Restart `npm run dev`
+**Provider status:**
+- Open `/api/scan-shifts/status`
+- `workersAi` should be `true`
+- Groq and FreeModel show whether their optional secrets are configured
+
+**All providers unavailable:**
+- The app opens a manual preview row instead of losing the scan
+- Check Workers AI usage and provider status
+- Add `GROQ_API_KEY` for an independent fallback
 
 **OCR is slow:**
 - First run downloads Tesseract model (~60MB)

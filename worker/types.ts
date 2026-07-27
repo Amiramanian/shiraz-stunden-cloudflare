@@ -1,18 +1,11 @@
-export interface Env {
-  DB: D1Database;
-  ASSETS: Fetcher;
-
-  APP_TIMEZONE?: string;
+export interface Env extends Cloudflare.Env {
   REQUIRE_ACCESS?: string;
 
-  GOOGLE_CLIENT_EMAIL?: string;
-  GOOGLE_PRIVATE_KEY?: string;
-  GOOGLE_SPREADSHEET_ID?: string;
-  GOOGLE_SHEET_URL?: string;
+  GOOGLE_CLIENT_EMAIL: string;
+  GOOGLE_PRIVATE_KEY: string;
 
-  FREEMODEL_API_KEY?: string;
-  FREEMODEL_MODEL?: string;
-  FREEMODEL_BASE_URL?: string;
+  FREEMODEL_API_KEY: string;
+  GROQ_API_KEY?: string;
 }
 
 export interface ShiftRecord {
@@ -52,7 +45,7 @@ export interface ScannedShift {
   startTime: string;
   endTime: string;
   confidence?: number;
-  source?: 'freemodel' | 'ocr' | 'merged';
+  source?: 'workers-ai' | 'groq' | 'freemodel' | 'ocr' | 'merged' | 'manual';
 }
 
 export interface ScanShiftsRequest {
@@ -60,11 +53,32 @@ export interface ScanShiftsRequest {
   todayIso: string;
   directory: string;
   images: string[];
-  ocrText?: string;
+  imageNames?: string[];
+  ocrTexts?: string[];
 }
 
 export interface ScanShiftsResponse {
   shifts: ScannedShift[];
   provider: string;
   warnings?: string[];
+  manualFallback?: boolean;
+}
+
+export interface ScanCorrectionShift {
+  employee?: string;
+  department?: string;
+  date?: string;
+  startTime?: string;
+  endTime?: string;
+}
+
+export interface ScanCorrectionInput {
+  rawEmployee: string;
+  suggestedEmployee?: string;
+  rawDepartment?: string;
+  original?: ScanCorrectionShift;
+  final: ScanCorrectionShift & {
+    employee: string;
+    department: string;
+  };
 }

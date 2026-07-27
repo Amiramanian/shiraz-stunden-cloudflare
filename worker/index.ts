@@ -1,4 +1,10 @@
-import type { Env, HinweisRecord, ShiftRecord, StaffMemberRecord } from './types';
+import type {
+  Env,
+  HinweisRecord,
+  ScanCorrectionInput,
+  ShiftRecord,
+  StaffMemberRecord
+} from './types';
 import {
   bulkCreateShifts,
   createHinweis,
@@ -9,6 +15,8 @@ import {
   listShifts,
   listStaff,
   logAudit,
+  recordScanCorrection,
+  updateScanHistory,
   updateStaff
 } from './db';
 import { exportReport } from './report';
@@ -88,6 +96,35 @@ function parseShift(input: Partial<ShiftRecord>): Omit<ShiftRecord, 'id'> {
     endTime: validateTime(input.endTime, 'Endzeit'),
     durationHours: validateDuration(input.durationHours)
   };
+}
+
+function parseScanCorrection(value: ScanCorrectionInput): ScanCorrectionInput {
+  const finalEmployee = requireString(value?.final?.employee, 'final.employee');
+  const finalDepartment = requireString(value?.final?.department, 'final.department');
+  const final = {
+    ...value.final,
+    employee: finalEmployee,
+    department: finalDepartment
+  };
+
+  if (final.date) final.date = validateDate(final.date);
+  if (final.startTime) final.startTime = validateTime(final.startTime, 'final.startTime');
+  if (final.endTime) final.endTime = validateTime(final.endTime, 'final.endTime');
+
+  return {
+    rawEmployee: requireString(value.rawEmployee, 'rawEmployee'),
+    suggestedEmployee: String(value.suggestedEmployee || '').trim() || undefined,
+    rawDepartment: String(value.rawDepartment || '').trim() || undefined,
+    original: value.original,
+    final
+  };
+}
+
+function sanitizeSyncError(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error))
+    .replace(/Bearer\s+[^\s]+/gi, '[REDACTED]')
+    .replace(/\b(?:gsk_|fe_oa_|sk-)[A-Za-z0-9_-]+/g, '[REDACTED]')
+    .slice(0, 500);
 }
 
 function parseStaff(input: Partial<StaffMemberRecord>): Omit<StaffMemberRecord, 'id' | 'hidden'> & { hidden?: boolean } {
@@ -192,12 +229,78 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     }
 
     if (url.pathname === '/api/shifts/bulk' && method === 'POST') {
-      const body = await readJson<{ shifts?: Array<Partial<ShiftRecord>> }>(request);
+      const body = await readJson<{
+        shifts?: Array<Partial<ShiftRecord>>;
+        scanId?: string;
+        corrections?: ScanCorrectionInput[];
+      }>(request);
       const shifts = (body.shifts || []).map(parseShift);
+      const scanId = String(body.scanId || '').trim();
+      const corrections = (body.corrections || []).map(parseScanCorrection);
+
+      if (scanId) {
+        const scan = await env.DB.prepare(`
+          SELECT id FROM scan_history WHERE id = ? AND business = ?
+        `).bind(scanId, shifts[0]?.business || '').first();
+        if (!scan) return json({ error: 'Scan-Verlauf nicht gefunden.' }, 404);
+      } else if (corrections.length) {
+        return json({ error: 'scanId ist für Korrekturen erforderlich.' }, 400);
+      }
+
       const result = await bulkCreateShifts(env, shifts);
-      await logAudit(env, 'bulk_create', 'shift', null, { count: shifts.length }, email);
-      ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
-      return json(result, 201);
+      let learnedCorrections = 0;
+      for (const correction of corrections) {
+        const learned = await recordScanCorrection(
+          env,
+          scanId,
+          validateBusiness(shifts[0]?.business),
+          correction
+        );
+        if (learned.inserted) learnedCorrections += 1;
+      }
+
+      if (scanId) {
+        await updateScanHistory(env, scanId, {
+          savedCount: result.created,
+          skippedCount: result.skipped,
+          finalResultJson: JSON.stringify({
+            savedShifts: shifts,
+            corrections
+          })
+        });
+      }
+
+      await logAudit(env, 'bulk_create', 'shift', null, {
+        requested: shifts.length,
+        created: result.created,
+        skipped: result.skipped,
+        scanId: scanId || null,
+        learnedCorrections
+      }, email);
+
+      try {
+        await exportReport(env, 'manual');
+        return json({
+          ...result,
+          learnedCorrections,
+          excelSynced: true,
+          spreadsheetId: env.GOOGLE_SPREADSHEET_ID || null,
+          webViewLink: env.GOOGLE_SHEET_URL || null
+        }, 201);
+      } catch (error) {
+        const syncError = sanitizeSyncError(error);
+        console.error(JSON.stringify({
+          event: 'bulk_shift_excel_sync_failed',
+          scanId: scanId || null,
+          message: syncError
+        }));
+        return json({
+          ...result,
+          learnedCorrections,
+          excelSynced: false,
+          syncError
+        }, 201);
+      }
     }
 
     if (url.pathname === '/api/hinweise' && method === 'GET') {
@@ -232,36 +335,64 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       return json(await exportReport(env, 'manual'));
     }
 
+    if (url.pathname === '/api/scan-shifts/status' && method === 'GET') {
+      return json({
+        primaryProvider: 'workers-ai',
+        providers: {
+          workersAi: Boolean(env.AI),
+          groq: Boolean(env.GROQ_API_KEY),
+          freeModel: Boolean(env.FREEMODEL_API_KEY)
+        },
+        models: {
+          workersAi: {
+            text: env.WORKERS_AI_MODEL,
+            vision: env.WORKERS_AI_VISION_MODEL
+          },
+          groq: env.GROQ_MODEL,
+          freeModel: env.FREEMODEL_MODEL
+        }
+      });
+    }
+
     if (url.pathname === '/api/scan-shifts' && method === 'POST') {
       const body = await readJson<{
         business?: string;
         todayIso?: string;
         staffConfig?: Record<string, Record<string, string[]>>;
         images?: string[];
+        imageNames?: string[];
+        ocrTexts?: string[];
       }>(request);
       
       const business = requireString(body.business, 'business') as 'Shiraz' | 'Djadoo' | 'Catering';
       const todayIso = requireString(body.todayIso, 'todayIso');
       const staffConfig = body.staffConfig || {};
       const images = Array.isArray(body.images) ? body.images : [];
+      const imageNames = Array.isArray(body.imageNames) ? body.imageNames : [];
+      const ocrTexts = Array.isArray(body.ocrTexts) ? body.ocrTexts : [];
 
       if (images.length === 0) {
         return json({ error: 'Keine Bilder bereitgestellt.' }, 400);
       }
-      if (images.length > 5) {
-        return json({ error: 'Maximum 5 Bilder pro Scan.' }, 400);
+      if (images.length > 10) {
+        return json({ error: 'Maximum 10 Bilder pro Scan.' }, 400);
       }
 
       const result = await processScanRequest(env, {
         business,
         todayIso,
         staffConfig,
-        images
+        images,
+        imageNames,
+        ocrTexts
       }, email);
 
       await logAudit(env, 'scan_shifts', 'scan_history', result.scanId, {
         imageCount: images.length,
-        shiftCount: result.shifts.length
+        shiftCount: result.shifts.length,
+        provider: result.provider,
+        warningCount: result.warnings.length,
+        manualFallback: Boolean(result.manualFallback)
       }, email);
 
       return json(result, 201);

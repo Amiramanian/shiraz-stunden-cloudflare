@@ -4,7 +4,7 @@ import ScanShiftsEntry from '@/components/worktime/ScanShiftsEntry';
 
 export default function ScanShiftsPage() {
   const navigate = useNavigate();
-  const { staffConfig, selectedScanBusiness, todayIso, handleScanAddShifts } = useOutletContext();
+  const { staffConfig, selectedScanBusiness, todayIso } = useOutletContext();
 
   if (!selectedScanBusiness || !staffConfig || !staffConfig[selectedScanBusiness]) {
     navigate('/');
@@ -18,7 +18,7 @@ export default function ScanShiftsPage() {
       business={selectedScanBusiness}
       staffConfig={scopedStaffConfig}
       todayIso={todayIso}
-      onConfirmAll={handleScanAddShifts}
+      onConfirmAll={() => navigate('/')}
       onBack={() => navigate('/')}
     />
   );

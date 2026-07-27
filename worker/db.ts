@@ -1,4 +1,10 @@
-import type { Env, HinweisRecord, ShiftRecord, StaffMemberRecord } from './types';
+import type {
+  Env,
+  HinweisRecord,
+  ScanCorrectionInput,
+  ShiftRecord,
+  StaffMemberRecord
+} from './types';
 
 function mapShift(row: Record<string, unknown>): ShiftRecord {
   return {
@@ -156,8 +162,17 @@ export async function bulkCreateShifts(env: Env, inputs: Array<Omit<ShiftRecord,
     input.endTime,
     input.durationHours
   ));
-  if (statements.length) await env.DB.batch(statements);
-  return { created: statements.length };
+  if (!statements.length) return { created: 0, skipped: 0 };
+
+  const results = await env.DB.batch(statements);
+  const created = results.reduce(
+    (total, result) => total + Number(result.meta.changes || 0),
+    0
+  );
+  return {
+    created,
+    skipped: inputs.length - created
+  };
 }
 
 export async function listHinweise(env: Env): Promise<HinweisRecord[]> {
@@ -282,15 +297,31 @@ export async function getScanAlias(
   business: string,
   department: string,
   normalizedRawName: string
-): Promise<{ employee: string; employeeKey: string } | null> {
-  const row = await env.DB.prepare(`
-    SELECT employee, employee_key FROM scan_aliases
+): Promise<{ employee: string; employeeKey: string; department: string } | null> {
+  const exact = await env.DB.prepare(`
+    SELECT employee, employee_key, COALESCE(final_department, department) AS final_department
+    FROM scan_aliases
     WHERE business = ? AND department = ? AND normalized_raw_name = ?
   `).bind(business, department, normalizedRawName).first();
+
+  let row = exact;
+  if (!row) {
+    const candidates = await env.DB.prepare(`
+      SELECT employee, employee_key, COALESCE(final_department, department) AS final_department
+      FROM scan_aliases
+      WHERE business = ? AND normalized_raw_name = ?
+      ORDER BY correction_count DESC, updated_at DESC
+      LIMIT 2
+    `).bind(business, normalizedRawName).all();
+    const results = candidates.results || [];
+    if (results.length === 1) row = results[0];
+  }
+
   if (!row) return null;
   return {
     employee: String(row.employee),
-    employeeKey: String(row.employee_key)
+    employeeKey: String(row.employee_key),
+    department: String(row.final_department)
   };
 }
 
@@ -301,53 +332,112 @@ export async function createOrUpdateScanAlias(
   rawName: string,
   normalizedRawName: string,
   employee: string,
-  employeeKey: string
-) {
-  const existing = await getScanAlias(env, business, department, normalizedRawName);
-  if (existing) {
-    await env.DB.prepare(`
-      UPDATE scan_aliases
-      SET correction_count = correction_count + 1, updated_at = datetime('now')
-      WHERE business = ? AND department = ? AND normalized_raw_name = ?
-    `).bind(business, department, normalizedRawName).run();
-  } else {
-    await env.DB.prepare(`
-      INSERT INTO scan_aliases (
-        id, business, department, raw_name, normalized_raw_name, employee, employee_key
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      crypto.randomUUID(),
-      business,
-      department,
-      rawName,
-      normalizedRawName,
-      employee,
-      employeeKey
-    ).run();
-  }
-}
-
-export async function createScanCorrection(
-  env: Env,
-  scanId: string,
-  rawEmployee: string,
-  suggestedEmployee: string | null,
-  finalEmployee: string,
-  business: string,
-  department: string
+  employeeKey: string,
+  finalDepartment = department,
+  correctionIncrement = 1
 ) {
   await env.DB.prepare(`
-    INSERT INTO scan_corrections (
-      id, scan_id, raw_employee, suggested_employee, final_employee, business, department
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scan_aliases (
+      id, business, department, raw_name, normalized_raw_name,
+      employee, employee_key, final_department, correction_count
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(business, department, normalized_raw_name) DO UPDATE SET
+      raw_name = excluded.raw_name,
+      employee = excluded.employee,
+      employee_key = excluded.employee_key,
+      final_department = excluded.final_department,
+      correction_count = scan_aliases.correction_count + excluded.correction_count,
+      updated_at = datetime('now')
+  `).bind(
+    crypto.randomUUID(),
+    business,
+    department,
+    rawName,
+    normalizedRawName,
+    employee,
+    employeeKey,
+    finalDepartment,
+    Math.max(0, correctionIncrement)
+  ).run();
+}
+
+function correctionKey(
+  scanId: string,
+  business: string,
+  correction: ScanCorrectionInput
+): string {
+  return JSON.stringify({
+    scanId,
+    business,
+    rawEmployee: correction.rawEmployee,
+    rawDepartment: correction.rawDepartment || correction.original?.department || '',
+    original: correction.original || {},
+    final: correction.final
+  });
+}
+
+export async function recordScanCorrection(
+  env: Env,
+  scanId: string,
+  business: string,
+  correction: ScanCorrectionInput
+) {
+  const rawName = correction.rawEmployee.trim();
+  const rawDepartment = (
+    correction.rawDepartment ||
+    correction.original?.department ||
+    correction.final.department
+  ).trim();
+  const finalEmployee = correction.final.employee.trim();
+  const finalDepartment = correction.final.department.trim();
+  const normalizedRawName = rawName.toLocaleLowerCase('de-DE')
+    .replace(/\./g, '')
+    .replace(/[-_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const employeeKey = finalEmployee.toLocaleLowerCase('de-DE')
+    .replace(/\./g, '')
+    .replace(/[-_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!rawName || !rawDepartment || !finalEmployee || !finalDepartment) {
+    throw new Error('Unvollständige Scan-Korrektur.');
+  }
+
+  const insertResult = await env.DB.prepare(`
+    INSERT OR IGNORE INTO scan_corrections (
+      id, scan_id, raw_employee, suggested_employee, final_employee,
+      business, department, raw_department, final_department,
+      original_json, final_json, correction_key
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     crypto.randomUUID(),
     scanId,
-    rawEmployee,
-    suggestedEmployee,
+    rawName,
+    correction.suggestedEmployee?.trim() || null,
     finalEmployee,
     business,
-    department
+    finalDepartment,
+    rawDepartment,
+    finalDepartment,
+    JSON.stringify(correction.original || {}),
+    JSON.stringify(correction.final),
+    correctionKey(scanId, business, correction)
   ).run();
+
+  const inserted = Number(insertResult.meta.changes || 0) > 0;
+  await createOrUpdateScanAlias(
+    env,
+    business,
+    rawDepartment,
+    rawName,
+    normalizedRawName,
+    finalEmployee,
+    employeeKey,
+    finalDepartment,
+    inserted ? 1 : 0
+  );
+  return { inserted };
 }
 

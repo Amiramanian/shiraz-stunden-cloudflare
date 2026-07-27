@@ -52,10 +52,6 @@ export function normalizeTimeString(value) {
     throw new Error('Ungültige Uhrzeit.');
   }
 
-  if (minutes !== 0 && minutes !== 30) {
-    throw new Error('Bitte nur volle oder halbe Stunden eingeben, z.B. 11 oder 1130.');
-  }
-
   return String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
 }
 
