@@ -1,4 +1,4 @@
-import { Tesseract } from 'tesseract.js';
+import { createWorker } from 'tesseract.js';
 
 // Canvas-based image preprocessing for better OCR results
 export async function preprocessImage(file, maxDim = 1920) {
@@ -63,7 +63,7 @@ export async function preprocessImage(file, maxDim = 1920) {
 // Local Tesseract OCR
 export async function runLocalOCR(dataUrl) {
   try {
-    const worker = await Tesseract.createWorker('deu'); // German language
+    const worker = await createWorker('deu'); // German language
     const result = await worker.recognize(dataUrl);
     const text = result.data.text || '';
     await worker.terminate();
