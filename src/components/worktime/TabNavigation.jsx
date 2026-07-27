@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Clock, BarChart3 } from 'lucide-react';
+import { Clock, BarChart3, Database } from 'lucide-react';
 
 export default function TabNavigation() {
   const location = useLocation();
@@ -8,7 +8,8 @@ export default function TabNavigation() {
 
   const tabs = [
     { key: 'shift', label: 'Schicht erfassen', icon: Clock, active: location.pathname === '/', onClick: () => navigate('/') },
-    { key: 'reports', label: 'Reports', icon: BarChart3, active: location.pathname === '/reports', onClick: () => navigate('/reports') }
+    { key: 'reports', label: 'Reports', icon: BarChart3, active: location.pathname === '/reports', onClick: () => navigate('/reports') },
+    { key: 'manage', label: 'Verwalten', icon: Database, active: location.pathname === '/manage', onClick: () => navigate('/manage') }
   ];
 
   return (

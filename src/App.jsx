@@ -11,6 +11,7 @@ import ShiftPage from '@/pages/worktime/ShiftPage';
 import HinweisEmployeePage from '@/pages/worktime/HinweisEmployeePage';
 import HinweisPage from '@/pages/worktime/HinweisPage';
 import ReportsPage from '@/pages/worktime/ReportsPage';
+import ManagePage from '@/pages/worktime/ManagePage';
 import ScanShiftsPage from '@/pages/worktime/ScanShiftsPage';
 import PageNotFound from '@/lib/PageNotFound';
 
@@ -28,6 +29,7 @@ function App() {
             <Route path="hinweis-employee" element={<HinweisEmployeePage />} />
             <Route path="hinweis" element={<HinweisPage />} />
             <Route path="reports" element={<ReportsPage />} />
+            <Route path="manage" element={<ManagePage />} />
             <Route path="scan-shifts" element={<ScanShiftsPage />} />
           </Route>
           <Route path="*" element={<PageNotFound />} />

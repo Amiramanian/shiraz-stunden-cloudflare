@@ -146,6 +146,56 @@ export async function createShift(env: Env, input: Omit<ShiftRecord, 'id'>) {
   return { id, ...input };
 }
 
+export async function getShift(env: Env, id: string): Promise<ShiftRecord | null> {
+  const row = await env.DB.prepare(`
+    SELECT id, business, department, employee, employee_key, date, start_time, end_time, duration_hours
+    FROM shifts
+    WHERE id = ? AND deleted_at IS NULL
+  `).bind(id).first();
+  return row ? mapShift(row as Record<string, unknown>) : null;
+}
+
+export async function updateShift(
+  env: Env,
+  id: string,
+  input: Omit<ShiftRecord, 'id'>
+): Promise<ShiftRecord | null> {
+  const existing = await getShift(env, id);
+  if (!existing) return null;
+
+  await env.DB.prepare(`
+    UPDATE shifts
+    SET business = ?, department = ?, employee = ?, employee_key = ?,
+        date = ?, start_time = ?, end_time = ?, duration_hours = ?,
+        updated_at = datetime('now')
+    WHERE id = ? AND deleted_at IS NULL
+  `).bind(
+    input.business,
+    input.department,
+    input.employee,
+    input.employeeKey,
+    input.date,
+    input.startTime,
+    input.endTime,
+    input.durationHours,
+    id
+  ).run();
+
+  return { id, ...input };
+}
+
+export async function softDeleteShift(env: Env, id: string): Promise<ShiftRecord | null> {
+  const existing = await getShift(env, id);
+  if (!existing) return null;
+
+  await env.DB.prepare(`
+    UPDATE shifts
+    SET deleted_at = datetime('now'), updated_at = datetime('now')
+    WHERE id = ? AND deleted_at IS NULL
+  `).bind(id).run();
+  return existing;
+}
+
 export async function bulkCreateShifts(env: Env, inputs: Array<Omit<ShiftRecord, 'id'>>) {
   const statements = inputs.map((input) => env.DB.prepare(`
     INSERT OR IGNORE INTO shifts (
@@ -192,6 +242,44 @@ export async function createHinweis(env: Env, input: Omit<HinweisRecord, 'id'>) 
     VALUES (?, ?, ?, ?, ?)
   `).bind(id, input.employee, input.employeeKey, input.date, input.text).run();
   return { id, ...input };
+}
+
+export async function getHinweis(env: Env, id: string): Promise<HinweisRecord | null> {
+  const row = await env.DB.prepare(`
+    SELECT id, employee, employee_key, date, text
+    FROM hinweise
+    WHERE id = ? AND deleted_at IS NULL
+  `).bind(id).first();
+  return row ? mapHinweis(row as Record<string, unknown>) : null;
+}
+
+export async function updateHinweis(
+  env: Env,
+  id: string,
+  input: Omit<HinweisRecord, 'id'>
+): Promise<HinweisRecord | null> {
+  const existing = await getHinweis(env, id);
+  if (!existing) return null;
+
+  await env.DB.prepare(`
+    UPDATE hinweise
+    SET employee = ?, employee_key = ?, date = ?, text = ?, updated_at = datetime('now')
+    WHERE id = ? AND deleted_at IS NULL
+  `).bind(input.employee, input.employeeKey, input.date, input.text, id).run();
+
+  return { id, ...input };
+}
+
+export async function softDeleteHinweis(env: Env, id: string): Promise<HinweisRecord | null> {
+  const existing = await getHinweis(env, id);
+  if (!existing) return null;
+
+  await env.DB.prepare(`
+    UPDATE hinweise
+    SET deleted_at = datetime('now'), updated_at = datetime('now')
+    WHERE id = ? AND deleted_at IS NULL
+  `).bind(id).run();
+  return existing;
 }
 
 export async function logAudit(

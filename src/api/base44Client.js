@@ -37,6 +37,11 @@ function createEntityApi(resource) {
         body: JSON.stringify(patch)
       });
     },
+    async delete(id) {
+      return api(`/api/${resource}/${encodeURIComponent(id)}`, {
+        method: 'DELETE'
+      });
+    },
     async bulkCreate(inputs) {
       if (resource !== 'shifts') throw new Error('Bulk create is only implemented for shifts.');
       return api('/api/shifts/bulk', {
