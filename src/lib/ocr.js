@@ -1,87 +1,222 @@
-import { createWorker } from 'tesseract.js';
+import Tesseract from 'tesseract.js';
 
-// Canvas-based image preprocessing for better OCR results
-export async function preprocessImage(file, maxDim = 1920) {
+const MAX_IMAGE_COUNT = 5;
+const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
+
+/**
+ * Prepares an uploaded image for OCR:
+ * - limits the maximum image dimensions
+ * - converts the image to grayscale
+ * - increases contrast
+ * - returns a JPEG data URL
+ */
+export async function preprocessImage(file, maxDimension = 1920) {
+  if (!(file instanceof File || file instanceof Blob)) {
+    throw new Error('Invalid image file.');
+  }
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+
+    reader.onerror = () => {
+      reject(new Error('The image could not be read.'));
+    };
+
     reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
+      const image = new Image();
+
+      image.onerror = () => {
+        reject(new Error('The selected file is not a readable image.'));
+      };
+
+      image.onload = () => {
         try {
-          // Calculate scale
-          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-          const w = Math.round(img.width * scale);
-          const h = Math.round(img.height * scale);
+          const largestDimension = Math.max(
+            image.naturalWidth || image.width,
+            image.naturalHeight || image.height
+          );
 
-          // Create canvas
+          const scale =
+            largestDimension > maxDimension
+              ? maxDimension / largestDimension
+              : 1;
+
+          const width = Math.max(
+            1,
+            Math.round((image.naturalWidth || image.width) * scale)
+          );
+
+          const height = Math.max(
+            1,
+            Math.round((image.naturalHeight || image.height) * scale)
+          );
+
           const canvas = document.createElement('canvas');
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) throw new Error('Could not get canvas context');
+          canvas.width = width;
+          canvas.height = height;
 
-          // Draw original image
-          ctx.drawImage(img, 0, 0, w, h);
+          const context = canvas.getContext('2d', {
+            willReadFrequently: true
+          });
 
-          // Get image data
-          const imageData = ctx.getImageData(0, 0, w, h);
-          const data = imageData.data;
-
-          // Convert to grayscale and improve contrast
-          for (let i = 0; i < data.length; i += 4) {
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
-            const gray = r * 0.299 + g * 0.587 + b * 0.114;
-            data[i] = data[i + 1] = data[i + 2] = gray;
+          if (!context) {
+            throw new Error('Could not initialize image processing.');
           }
 
-          // Apply contrast enhancement
-          const threshold = 128;
-          for (let i = 0; i < data.length; i += 4) {
-            data[i] = data[i] > threshold ? 255 : 0;
-            data[i + 1] = data[i + 1] > threshold ? 255 : 0;
-            data[i + 2] = data[i + 2] > threshold ? 255 : 0;
+          context.drawImage(image, 0, 0, width, height);
+
+          const imageData = context.getImageData(0, 0, width, height);
+          const pixels = imageData.data;
+
+          for (let index = 0; index < pixels.length; index += 4) {
+            const red = pixels[index];
+            const green = pixels[index + 1];
+            const blue = pixels[index + 2];
+
+            const grayscale =
+              red * 0.299 +
+              green * 0.587 +
+              blue * 0.114;
+
+            /*
+             * Moderate contrast enhancement is preferable to converting
+             * everything to pure black and white. Hard thresholding can
+             * remove thin numbers and table lines from schedule images.
+             */
+            const contrasted = Math.max(
+              0,
+              Math.min(255, (grayscale - 128) * 1.35 + 128)
+            );
+
+            pixels[index] = contrasted;
+            pixels[index + 1] = contrasted;
+            pixels[index + 2] = contrasted;
           }
 
-          ctx.putImageData(imageData, 0, 0);
+          context.putImageData(imageData, 0, 0);
 
-          // Convert to data URL (JPEG quality 0.9)
-          resolve(canvas.toDataURL('image/jpeg', 0.9));
+          resolve(canvas.toDataURL('image/jpeg', 0.92));
         } catch (error) {
-          reject(error);
+          reject(
+            error instanceof Error
+              ? error
+              : new Error(String(error))
+          );
         }
       };
-      img.onerror = reject;
-      img.src = reader.result;
+
+      image.src = String(reader.result);
     };
-    reader.onerror = reject;
+
     reader.readAsDataURL(file);
   });
 }
 
-// Local Tesseract OCR
-export async function runLocalOCR(dataUrl) {
+/**
+ * Runs German OCR locally in the browser with Tesseract.js 4.x.
+ */
+export async function runLocalOCR(dataUrl, onProgress) {
+  let worker = null;
+
   try {
-    const worker = await createWorker('deu'); // German language
+    if (
+      !Tesseract ||
+      typeof Tesseract.createWorker !== 'function'
+    ) {
+      throw new Error(
+        'Tesseract OCR could not be initialized.'
+      );
+    }
+
+    worker = await Tesseract.createWorker({
+      logger: (message) => {
+        if (
+          typeof onProgress === 'function' &&
+          typeof message?.progress === 'number'
+        ) {
+          onProgress({
+            status: message.status || '',
+            progress: message.progress
+          });
+        }
+      }
+    });
+
+    await worker.loadLanguage('deu');
+    await worker.initialize('deu');
+
     const result = await worker.recognize(dataUrl);
-    const text = result.data.text || '';
-    await worker.terminate();
-    return text;
+    return result?.data?.text?.trim() || '';
   } catch (error) {
     console.error('OCR error:', error);
-    throw new Error(`OCR processing failed: ${error instanceof Error ? error.message : String(error)}`);
+
+    throw new Error(
+      `OCR processing failed: ${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`
+    );
+  } finally {
+    if (worker) {
+      try {
+        await worker.terminate();
+      } catch (terminationError) {
+        console.warn(
+          'OCR worker could not be terminated cleanly:',
+          terminationError
+        );
+      }
+    }
   }
 }
 
-// Validate image before processing
+/**
+ * Validates one uploaded image.
+ */
 export function validateImage(file) {
-  const validMimes = ['image/jpeg', 'image/png', 'image/webp'];
-  if (!validMimes.includes(file.type)) {
+  if (!(file instanceof File || file instanceof Blob)) {
+    return 'Invalid image file';
+  }
+
+  const allowedMimeTypes = [
+    'image/jpeg',
+    'image/png',
+    'image/webp'
+  ];
+
+  if (!allowedMimeTypes.includes(file.type)) {
     return 'Only JPEG, PNG, or WebP images are supported';
   }
-  if (file.size > 50 * 1024 * 1024) {
-    return 'Image must be smaller than 50MB';
+
+  if (file.size > MAX_IMAGE_SIZE) {
+    return 'Image must be smaller than 8 MB';
   }
+
+  return null;
+}
+
+/**
+ * Validates the complete image selection.
+ */
+export function validateImages(files) {
+  const imageFiles = Array.from(files || []);
+
+  if (imageFiles.length === 0) {
+    return 'Please select at least one image';
+  }
+
+  if (imageFiles.length > MAX_IMAGE_COUNT) {
+    return `A maximum of ${MAX_IMAGE_COUNT} images can be uploaded`;
+  }
+
+  for (const file of imageFiles) {
+    const error = validateImage(file);
+
+    if (error) {
+      return `${file.name || 'Image'}: ${error}`;
+    }
+  }
+
   return null;
 }
