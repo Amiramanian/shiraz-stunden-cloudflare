@@ -1,14 +1,45 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Camera, Loader2, Check, Trash2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { calculateDurationHours, normalizeTimeString } from '@/lib/timeUtils';
 import { buildEffectiveStaffConfig } from '@/lib/staffConfig';
 import {
   prepareImageForCloud,
   preprocessImage,
-  runLocalOCR,
+  runLocalOCRBatch,
   validateImage,
   validateImages
 } from '@/lib/ocr';
+
+function validateShiftRow(row) {
+  const errors = [];
+  let duration = null;
+
+  if (!String(row.department || '').trim()) errors.push('Abteilung fehlt');
+  if (!String(row.employee || '').trim()) errors.push('Name fehlt');
+
+  const date = String(row.date || '');
+  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? new Date(`${date}T00:00:00Z`)
+    : null;
+  if (!parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
+    errors.push('Datum prüfen');
+  }
+
+  const startTime = String(row.startTime || '');
+  const endTime = String(row.endTime || '');
+  if (!/^\d{2}:\d{2}$/.test(startTime)) errors.push('Startzeit im Format HH:MM');
+  if (!/^\d{2}:\d{2}$/.test(endTime)) errors.push('Endzeit im Format HH:MM');
+
+  if (errors.length === 0) {
+    try {
+      duration = calculateDurationHours(startTime, endTime);
+    } catch {
+      errors.push('Uhrzeiten prüfen');
+    }
+  }
+
+  return { valid: errors.length === 0, errors, duration };
+}
 
 export default function ScanShiftsEntry({ business, staffConfig, todayIso, onConfirmAll, onBack }) {
   const [status, setStatus] = useState('idle'); // idle | processing | preview | error | success
@@ -19,6 +50,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
   const [scanId, setScanId] = useState('');
   const [processingDetails, setProcessingDetails] = useState('');
   const fileInputRef = useRef(null);
+  const lastScanRef = useRef(null);
 
   // Map staffConfig to backend format
   const staffConfigForBackend = buildEffectiveStaffConfig(
@@ -35,17 +67,187 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
   function createManualRow(key = 0) {
     return {
       _key: key,
-      _checked: true,
+      _checked: false,
       _source: 'manual',
       _confidence: 1,
+      _needsReview: true,
+      _reviewReasons: ['Bitte Angaben vervollständigen und bestätigen'],
+      _validationErrors: [],
+      _rawEmployee: '',
+      _rawDepartment: '',
+      _suggestedEmployee: '',
       business,
       department: '',
       employee: '',
-      date: todayIso,
+      date: '',
       startTime: '',
       endTime: '',
       duration: null
     };
+  }
+
+  async function requestScan(scanInput, ocrTexts = []) {
+    const response = await fetch('/api/scan-shifts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        business,
+        todayIso,
+        staffConfig: staffConfigForBackend,
+        images: scanInput.cloudImages,
+        // Filenames are display/audit labels only. They never drive extraction.
+        imageNames: scanInput.files.map((file) => file.name),
+        ocrTexts
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Server error: ${response.status}`);
+    }
+
+    return response.json();
+  }
+
+  function shouldRunDetailedScan(result) {
+    return (
+      result?.manualFallback ||
+      !Array.isArray(result?.shifts) ||
+      result.shifts.length === 0 ||
+      result?.requiresDetailedScan === true ||
+      result?.detailedScanRecommended === true ||
+      result?.retryWithOcr === true
+    );
+  }
+
+  function presentScanResult(result) {
+    setScanId(result?.scanId || '');
+    const warningText = Array.isArray(result?.warnings)
+      ? result.warnings.join(' ')
+      : '';
+    setWarningMsg(warningText);
+
+    if (!Array.isArray(result?.shifts) || result.shifts.length === 0) {
+      const manualRows = [createManualRow(0)];
+      setRows(manualRows);
+      setSelectedRows(new Set());
+      setWarningMsg(
+        [warningText, 'Keine sichere Zeile erkannt. Bitte manuell ergänzen oder erneut genauer scannen.']
+          .filter(Boolean)
+          .join(' ')
+      );
+      setStatus('preview');
+      setProcessingDetails('');
+      return;
+    }
+
+    const previewRows = result.shifts.map((item, idx) => {
+      const startTime = item.normalizedStart || item.startTime || '';
+      const endTime = item.normalizedEnd || item.endTime || '';
+      const baseRow = {
+        _key: idx,
+        _checked: !item.needsReview,
+        _source: item.source || result.provider || 'gemini',
+        _confidence: Number.isFinite(Number(item.confidence)) ? Number(item.confidence) : 0.5,
+        _needsReview: Boolean(item.needsReview),
+        _reviewReasons: Array.isArray(item.reviewReasons) ? item.reviewReasons : [],
+        _imageName: item.imageName || '',
+        _evidence: item.evidence || '',
+        _writtenHours: item.writtenHours || '',
+        _rawEmployee: item.rawEmployee || item.employee || '',
+        _rawDepartment: item.department || '',
+        _suggestedEmployee: item.matchedEmployee || item.employee || '',
+        business: item.matchedBusiness || business,
+        department: item.matchedDepartment || item.department || '',
+        employee: item.matchedEmployee || item.employee || '',
+        date: item.date || '',
+        startTime,
+        endTime,
+        duration: null,
+        _original: {
+          employee: item.matchedEmployee || item.employee || '',
+          department: item.matchedDepartment || item.department || '',
+          date: item.date || '',
+          startTime,
+          endTime
+        }
+      };
+      const validation = validateShiftRow(baseRow);
+      return {
+        ...baseRow,
+        duration: validation.duration,
+        _validationErrors: validation.errors,
+        _needsReview: baseRow._needsReview || !validation.valid,
+        _reviewReasons: validation.valid ? baseRow._reviewReasons : validation.errors
+      };
+    });
+
+    setRows(previewRows);
+    setSelectedRows(new Set(
+      previewRows
+        .filter((row) => !row._needsReview && validateShiftRow(row).valid)
+        .map((row) => row._key)
+    ));
+    setStatus('preview');
+    setProcessingDetails('');
+  }
+
+  async function runDetailedScan(scanInput, fallbackResult = null) {
+    setStatus('processing');
+    setErrorMsg('');
+    setProcessingDetails('Genauer Scan: Bilder für lokale OCR vorbereiten...');
+
+    try {
+      const localOcrImages = [];
+      for (let index = 0; index < scanInput.files.length; index += 1) {
+        setProcessingDetails(
+          `Genauer Scan: Bild ${index + 1}/${scanInput.files.length} vorbereiten...`
+        );
+        localOcrImages.push(await preprocessImage(scanInput.files[index]));
+      }
+
+      const ocrTexts = await runLocalOCRBatch(localOcrImages, (progress) => {
+        const percent = Math.round((progress.progress || 0) * 100);
+        setProcessingDetails(
+          `Lokale OCR ${progress.imageIndex + 1}/${progress.imageCount}: ${percent}%`
+        );
+      });
+
+      if (!ocrTexts.some((text) => String(text || '').trim())) {
+        if (fallbackResult) presentScanResult(fallbackResult);
+        setWarningMsg(
+          'Die lokale OCR konnte keinen zusätzlichen Text lesen. Es wurde kein zweiter KI-Aufruf verbraucht.'
+        );
+        setStatus(fallbackResult || rows.length > 0 ? 'preview' : 'error');
+        if (!fallbackResult && rows.length === 0) {
+          setErrorMsg('Die lokale OCR konnte keinen Text erkennen.');
+        }
+        return;
+      }
+
+      setProcessingDetails('Genauer Scan: KI-Analyse mit OCR-Hinweisen...');
+      const result = await requestScan(scanInput, ocrTexts);
+      scanInput.latestResult = result;
+      presentScanResult(result);
+    } catch (error) {
+      console.warn('Detailed OCR scan failed:', error);
+      if (fallbackResult) {
+        presentScanResult(fallbackResult);
+        setWarningMsg(
+          `Der schnelle Scan wurde angezeigt. Der genauere OCR-Scan ist fehlgeschlagen: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        return;
+      }
+      setErrorMsg('Genauer Scan fehlgeschlagen: ' + (error?.message || error));
+      setStatus(rows.length > 0 ? 'preview' : 'error');
+    }
+  }
+
+  async function requestDetailedScan() {
+    if (!lastScanRef.current) return;
+    await runDetailedScan(lastScanRef.current);
   }
 
   async function handleFiles(e) {
@@ -64,123 +266,27 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
       const selectionError = validateImages(files);
       if (selectionError) throw new Error(selectionError);
 
-      setProcessingDetails('Bilder werden vorverarbeitet...');
-
-      // Preserve color for cloud handwriting recognition. The second,
-      // contrast-enhanced copy is only an optional local OCR hint.
-      const processedImages = [];
-      const localOcrImages = [];
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+      const cloudImages = [];
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
         const validError = validateImage(file);
-        if (validError) {
-          throw new Error(`${file.name}: ${validError}`);
-        }
+        if (validError) throw new Error(`${file.name}: ${validError}`);
 
-        setProcessingDetails(`Bild ${i + 1}/${files.length} wird vorverarbeitet...`);
-        const [cloudImage, ocrImage] = await Promise.all([
-          prepareImageForCloud(file),
-          preprocessImage(file)
-        ]);
-        processedImages.push(cloudImage);
-        localOcrImages.push(ocrImage);
+        setProcessingDetails(`Schneller Scan: Bild ${index + 1}/${files.length} vorbereiten...`);
+        cloudImages.push(await prepareImageForCloud(file));
       }
 
-      setProcessingDetails('OCR wird ausgeführt (lokal)...');
+      const scanInput = { files, cloudImages, latestResult: null };
+      lastScanRef.current = scanInput;
+      setProcessingDetails('Schneller Cloud-Scan läuft...');
+      const result = await requestScan(scanInput);
+      scanInput.latestResult = result;
 
-      // Run local OCR
-      const ocrResults = [];
-      for (let i = 0; i < localOcrImages.length; i++) {
-        setProcessingDetails(`OCR ${i + 1}/${processedImages.length}...`);
-        try {
-          const ocrText = await runLocalOCR(localOcrImages[i]);
-          ocrResults.push(ocrText);
-        } catch (ocrError) {
-          console.warn('Local OCR was skipped for one image:', ocrError);
-          ocrResults.push('');
-        }
+      if (shouldRunDetailedScan(result)) {
+        await runDetailedScan(scanInput, result);
+      } else {
+        presentScanResult(result);
       }
-
-      setProcessingDetails('KI-Analyse wird durchgeführt...');
-
-      // Call backend with processed images
-      const response = await fetch('/api/scan-shifts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          business,
-          todayIso,
-          staffConfig: staffConfigForBackend,
-          images: processedImages,
-          imageNames: files.map((file) => file.name),
-          ocrTexts: ocrResults
-        })
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || `Server error: ${response.status}`);
-      }
-
-      const result = await response.json();
-      setScanId(result.scanId || '');
-      const warningText = Array.isArray(result.warnings)
-        ? result.warnings.join(' ')
-        : '';
-      setWarningMsg(warningText);
-
-      if (!result.shifts || result.shifts.length === 0) {
-        if (result.manualFallback) {
-          const manualRows = [createManualRow(0)];
-          setRows(manualRows);
-          setSelectedRows(new Set([0]));
-          setStatus('preview');
-          setProcessingDetails('');
-          return;
-        }
-        setErrorMsg('Keine Schichten auf den Bildern erkannt.');
-        setStatus('error');
-        return;
-      }
-
-      // Transform result for preview display
-      const previewRows = result.shifts.map((item, idx) => ({
-        _key: idx,
-        _checked: !item.needsReview,
-        _source: item.source || result.provider || 'workers-ai',
-        _confidence: Number.isFinite(Number(item.confidence)) ? Number(item.confidence) : 0.5,
-        _needsReview: Boolean(item.needsReview),
-        _reviewReasons: Array.isArray(item.reviewReasons) ? item.reviewReasons : [],
-        _imageName: item.imageName || '',
-        _evidence: item.evidence || '',
-        _writtenHours: item.writtenHours || '',
-        _rawEmployee: item.rawEmployee || item.employee || '',
-        _rawDepartment: item.department || '',
-        _suggestedEmployee: item.matchedEmployee || item.employee || '',
-        business: item.matchedBusiness || business,
-        department: item.matchedDepartment || item.department || '',
-        employee: item.matchedEmployee || item.employee || '',
-        date: item.date || '',
-        startTime: item.normalizedStart,
-        endTime: item.normalizedEnd,
-        duration: calculateDurationHours(item.normalizedStart, item.normalizedEnd),
-        _original: {
-          employee: item.matchedEmployee || item.employee || '',
-          department: item.matchedDepartment || item.department || '',
-          date: item.date || '',
-          startTime: item.normalizedStart,
-          endTime: item.normalizedEnd
-        }
-      }));
-
-      setRows(previewRows);
-      setSelectedRows(new Set(
-        previewRows
-          .filter((row) => !row._needsReview)
-          .map((row) => row._key)
-      ));
-      setStatus('preview');
-      setProcessingDetails('');
     } catch (err) {
       console.error('Scan error:', err);
       setErrorMsg('Verarbeitung fehlgeschlagen: ' + (err?.message || err));
@@ -190,46 +296,74 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
     }
   }
 
+  function commitRowChange(key, changes, { confirmWhenValid = true } = {}) {
+    const current = rows.find((row) => row._key === key);
+    if (!current) return;
+
+    const candidate = { ...current, ...changes };
+    const validation = validateShiftRow(candidate);
+    const next = {
+      ...candidate,
+      duration: validation.duration,
+      _validationErrors: validation.errors
+    };
+
+    if (validation.valid && confirmWhenValid) {
+      next._needsReview = false;
+      next._reviewReasons = [];
+      next._confidence = Math.max(Number(next._confidence) || 0, 0.9);
+      next._correctionConfirmed = true;
+    } else if (!validation.valid) {
+      next._needsReview = true;
+      next._reviewReasons = validation.errors;
+      next._correctionConfirmed = false;
+    }
+
+    setRows((prev) => prev.map((row) => (row._key === key ? next : row)));
+    setSelectedRows((prev) => {
+      const selected = new Set(prev);
+      if (validation.valid && confirmWhenValid) selected.add(key);
+      if (!validation.valid) selected.delete(key);
+      return selected;
+    });
+    if (validation.valid) setErrorMsg('');
+  }
+
   function updateRowField(key, field, value) {
-    setRows((prev) =>
-      prev.map((row) => {
-        if (row._key !== key) return row;
-        const next = { ...row, [field]: value };
-
-        if (field === 'startTime' || field === 'endTime') {
-          try {
-            next.duration =
-              next.startTime && next.endTime
-                ? calculateDurationHours(next.startTime, next.endTime)
-                : null;
-          } catch {
-            next.duration = null;
-          }
-        }
-
-        return next;
-      })
-    );
+    commitRowChange(key, { [field]: value });
   }
 
   function normalizeRowTime(key, field) {
-    setRows((prev) =>
-      prev.map((row) => {
-        if (row._key !== key || !row[field]?.trim()) return row;
+    const row = rows.find((item) => item._key === key);
+    if (!row || !String(row[field] || '').trim()) return;
 
-        try {
-          const next = { ...row, [field]: normalizeTimeString(row[field]) };
-          next.duration =
-            next.startTime && next.endTime
-              ? calculateDurationHours(next.startTime, next.endTime)
-              : null;
-          return next;
-        } catch {
-          return row;
-        }
-      })
-    );
+    try {
+      commitRowChange(key, { [field]: normalizeTimeString(row[field]) });
+    } catch {
+      commitRowChange(key, { [field]: row[field] });
+    }
   }
+
+  function confirmReviewedRow(key) {
+    const row = rows.find((item) => item._key === key);
+    if (!row) return;
+    const validation = validateShiftRow(row);
+    if (!validation.valid) {
+      commitRowChange(key, {}, { confirmWhenValid: false });
+      return;
+    }
+    commitRowChange(key, {}, { confirmWhenValid: true });
+  }
+
+  useEffect(() => {
+    if (
+      status === 'preview' &&
+      rows.length > 0 &&
+      rows.every((row) => !row._needsReview && validateShiftRow(row).valid)
+    ) {
+      setWarningMsg('');
+    }
+  }, [rows, status]);
 
   function deleteRow(key) {
     setRows((prev) => prev.filter((row) => row._key !== key));
@@ -241,6 +375,20 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
   }
 
   function toggleRow(key) {
+    const row = rows.find((item) => item._key === key);
+    if (!row) return;
+    const validation = validateShiftRow(row);
+
+    if (!selectedRows.has(key) && !validation.valid) {
+      commitRowChange(key, {}, { confirmWhenValid: false });
+      return;
+    }
+
+    if (!selectedRows.has(key) && row._needsReview) {
+      confirmReviewedRow(key);
+      return;
+    }
+
     setSelectedRows((prev) => {
       const next = new Set(prev);
       if (next.has(key)) {
@@ -253,7 +401,19 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
   }
 
   function selectAll() {
-    setSelectedRows(new Set(rows.map((row) => row._key)));
+    const validRows = rows.filter((row) => validateShiftRow(row).valid);
+    setRows((prev) =>
+      prev.map((row) => {
+        if (!validRows.some((validRow) => validRow._key === row._key)) return row;
+        return {
+          ...row,
+          _needsReview: false,
+          _reviewReasons: [],
+          _correctionConfirmed: row._correctionConfirmed || row._needsReview
+        };
+      })
+    );
+    setSelectedRows(new Set(validRows.map((row) => row._key)));
   }
 
   function deselectAll() {
@@ -266,7 +426,6 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
       ...prev,
       createManualRow(newKey)
     ]);
-    setSelectedRows((prev) => new Set([...prev, newKey]));
   }
 
   async function saveSelected() {
@@ -368,9 +527,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
   function getSourceLabel(source) {
     if (source === 'manual') return 'Manuell';
     if (source === 'ocr') return 'OCR';
-    if (source === 'workers-ai') return 'Workers AI';
-    if (source === 'groq') return 'Groq';
-    if (source === 'freemodel') return 'FreeModel';
+    if (source === 'gemini') return 'Gemini';
     return 'KI';
   }
 
@@ -395,7 +552,8 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
             </div>
             <h2 className="text-2xl font-bold mb-2">Schichten scannen</h2>
             <p className="text-neutral-600 mb-6 text-center">
-              Laden Sie Fotos von Schichtplänen hoch. Verwendet werden lokale OCR und KI-Analyse.
+              Laden Sie ein oder mehrere Fotos hoch. Zuerst läuft der schnelle Cloud-Scan;
+              lokale OCR wird nur bei Bedarf nachgeladen.
             </p>
             <button
               onClick={() => fileInputRef.current?.click()}
@@ -431,7 +589,15 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
         </div>
         <h2 className="text-2xl font-bold mb-2 text-red-900">Fehler</h2>
         <p className="text-red-700 mb-6 text-center">{errorMsg}</p>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap justify-center gap-3">
+          {lastScanRef.current && (
+            <button
+              onClick={requestDetailedScan}
+              className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-indigo-700 transition"
+            >
+              Genauer scannen
+            </button>
+          )}
           <button
             onClick={() => {
               setStatus('idle');
@@ -509,6 +675,14 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
         >
           + Zeile hinzufügen
         </button>
+        {lastScanRef.current && (
+          <button
+            onClick={requestDetailedScan}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition"
+          >
+            Genauer scannen
+          </button>
+        )}
         <button
           onClick={() => {
             setStatus('idle');
@@ -516,6 +690,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
             setSelectedRows(new Set());
             setWarningMsg('');
             setScanId('');
+            lastScanRef.current = null;
           }}
           className="bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-orange-700 transition"
         >
@@ -550,15 +725,31 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
                     <span className="whitespace-nowrap rounded bg-blue-100 px-2 py-1 font-medium text-blue-800">
                       {getSourceLabel(row._source)}
                     </span>
+                  {row._correctionConfirmed && (
+                    <span className="rounded bg-emerald-100 px-2 py-1 font-semibold text-emerald-800">
+                      Korrigiert und bestätigt
+                    </span>
+                  )}
                   {row._imageName && (
                     <span className="rounded bg-neutral-100 px-2 py-1">
                       Bild: {row._imageName}
                     </span>
                   )}
                   {row._needsReview && (
-                    <span className="rounded bg-red-100 px-2 py-1 font-medium text-red-800">
-                      Prüfen: {row._reviewReasons.join(', ')}
-                    </span>
+                    <>
+                      <span className="rounded bg-red-100 px-2 py-1 font-medium text-red-800">
+                        Prüfen: {row._reviewReasons.join(', ')}
+                      </span>
+                      {validateShiftRow(row).valid && (
+                        <button
+                          type="button"
+                          onClick={() => confirmReviewedRow(row._key)}
+                          className="rounded bg-emerald-600 px-3 py-1 font-semibold text-white hover:bg-emerald-700"
+                        >
+                          Korrektur bestätigen
+                        </button>
+                      )}
+                    </>
                   )}
                   {row._evidence && (
                     <span className="min-w-0 max-w-full break-words" title={row._evidence}>

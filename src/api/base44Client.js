@@ -67,7 +67,7 @@ export const base44 = {
         exportToGoogleDrive: ['/api/report/export', 'POST'],
         getDriveFileLink: ['/api/report/link', 'GET'],
         getSetupStatus: ['/api/setup-status', 'GET'],
-        scanShiftsWithFreeModel: ['/api/scan-shifts', 'POST']
+        voiceShift: ['/api/voice/shift', 'POST']
       };
       const route = routes[name];
       if (!route) throw new Error(`Unknown function: ${name}`);
@@ -77,19 +77,6 @@ export const base44 = {
         ...(method === 'GET' ? {} : { body: JSON.stringify(body) })
       });
       return { ...payload, data: payload };
-    }
-  },
-  integrations: {
-    Core: {
-      async UploadFile() {
-        throw new Error('Spracheingabe wird in Phase 2 eingerichtet.');
-      },
-      async TranscribeAudio() {
-        throw new Error('Spracheingabe wird in Phase 2 eingerichtet.');
-      },
-      async InvokeLLM() {
-        throw new Error('Spracheingabe wird in Phase 2 eingerichtet.');
-      }
     }
   }
 };

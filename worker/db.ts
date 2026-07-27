@@ -225,9 +225,17 @@ export async function createScanHistory(
   imageCount: number
 ) {
   await env.DB.prepare(`
-    INSERT INTO scan_history (id, business, actor_email, image_count, status)
-    VALUES (?, ?, ?, ?, 'processing')
-  `).bind(scanId, business, actorEmail, imageCount).run();
+    INSERT INTO scan_history (
+      id, business, actor_email, provider, model, image_count, status
+    )
+    VALUES (?, ?, ?, 'gemini', ?, ?, 'processing')
+  `).bind(
+    scanId,
+    business,
+    actorEmail,
+    env.GEMINI_MODEL,
+    imageCount
+  ).run();
 }
 
 export async function updateScanHistory(
@@ -292,27 +300,41 @@ export async function updateScanHistory(
   `).bind(...values).run();
 }
 
+export function normalizeScanAliasName(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLocaleLowerCase('de-DE')
+    .replace(/\./g, '')
+    .replace(/[-_]/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
 export async function getScanAlias(
   env: Env,
   business: string,
   department: string,
   normalizedRawName: string
 ): Promise<{ employee: string; employeeKey: string; department: string } | null> {
+  const aliasKey = normalizeScanAliasName(normalizedRawName);
   const exact = await env.DB.prepare(`
     SELECT employee, employee_key, COALESCE(final_department, department) AS final_department
     FROM scan_aliases
-    WHERE business = ? AND department = ? AND normalized_raw_name = ?
-  `).bind(business, department, normalizedRawName).first();
+    WHERE business = ? AND department = ?
+      AND REPLACE(normalized_raw_name, ' ', '') = ?
+    ORDER BY correction_count DESC, updated_at DESC
+    LIMIT 1
+  `).bind(business, department, aliasKey).first();
 
   let row = exact;
   if (!row) {
     const candidates = await env.DB.prepare(`
       SELECT employee, employee_key, COALESCE(final_department, department) AS final_department
       FROM scan_aliases
-      WHERE business = ? AND normalized_raw_name = ?
+      WHERE business = ? AND REPLACE(normalized_raw_name, ' ', '') = ?
       ORDER BY correction_count DESC, updated_at DESC
       LIMIT 2
-    `).bind(business, normalizedRawName).all();
+    `).bind(business, aliasKey).all();
     const results = candidates.results || [];
     if (results.length === 1) row = results[0];
   }
@@ -390,16 +412,8 @@ export async function recordScanCorrection(
   ).trim();
   const finalEmployee = correction.final.employee.trim();
   const finalDepartment = correction.final.department.trim();
-  const normalizedRawName = rawName.toLocaleLowerCase('de-DE')
-    .replace(/\./g, '')
-    .replace(/[-_]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const employeeKey = finalEmployee.toLocaleLowerCase('de-DE')
-    .replace(/\./g, '')
-    .replace(/[-_]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const normalizedRawName = normalizeScanAliasName(rawName);
+  const employeeKey = normalizeScanAliasName(finalEmployee);
 
   if (!rawName || !rawDepartment || !finalEmployee || !finalDepartment) {
     throw new Error('Unvollständige Scan-Korrektur.');

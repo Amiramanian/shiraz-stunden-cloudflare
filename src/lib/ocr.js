@@ -1,5 +1,3 @@
-import Tesseract from 'tesseract.js';
-
 const MAX_IMAGE_COUNT = 10;
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 
@@ -113,12 +111,21 @@ export async function preprocessImage(file, maxDimension = 1920) {
 }
 
 /**
- * Runs German OCR locally in the browser with Tesseract.js 4.x.
+ * Runs a batch through one lazily-loaded German OCR worker. Tesseract is kept
+ * out of the initial browser bundle and the expensive language initialization
+ * happens only once for all images in the fallback scan.
  */
-export async function runLocalOCR(dataUrl, onProgress) {
+export async function runLocalOCRBatch(dataUrls, onProgress) {
+  const images = Array.from(dataUrls || []);
+  if (images.length === 0) return [];
+
   let worker = null;
+  let currentImageIndex = 0;
 
   try {
+    const tesseractModule = await import('tesseract.js');
+    const Tesseract = tesseractModule.default || tesseractModule;
+
     if (
       !Tesseract ||
       typeof Tesseract.createWorker !== 'function'
@@ -136,7 +143,9 @@ export async function runLocalOCR(dataUrl, onProgress) {
         ) {
           onProgress({
             status: message.status || '',
-            progress: message.progress
+            progress: message.progress,
+            imageIndex: currentImageIndex,
+            imageCount: images.length
           });
         }
       }
@@ -145,8 +154,17 @@ export async function runLocalOCR(dataUrl, onProgress) {
     await worker.loadLanguage('deu');
     await worker.initialize('deu');
 
-    const result = await worker.recognize(dataUrl);
-    return result?.data?.text?.trim() || '';
+    const texts = [];
+    for (currentImageIndex = 0; currentImageIndex < images.length; currentImageIndex += 1) {
+      try {
+        const result = await worker.recognize(images[currentImageIndex]);
+        texts.push(result?.data?.text?.trim() || '');
+      } catch (recognitionError) {
+        console.warn(`OCR skipped image ${currentImageIndex + 1}:`, recognitionError);
+        texts.push('');
+      }
+    }
+    return texts;
   } catch (error) {
     console.error('OCR error:', error);
 
@@ -169,6 +187,14 @@ export async function runLocalOCR(dataUrl, onProgress) {
       }
     }
   }
+}
+
+/**
+ * Backwards-compatible single-image helper.
+ */
+export async function runLocalOCR(dataUrl, onProgress) {
+  const [text = ''] = await runLocalOCRBatch([dataUrl], onProgress);
+  return text;
 }
 
 /**

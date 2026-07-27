@@ -27,7 +27,12 @@ export default function Home() {
   const [selectedScanBusiness, setSelectedScanBusiness] = useState('');
   const [loading, setLoading] = useState(true);
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Berlin',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
   const todayDisplay = new Date().toLocaleDateString('de-DE', {
     day: '2-digit',
     month: '2-digit',
@@ -177,8 +182,54 @@ export default function Home() {
     startTime,
     endTime,
     durationHours
-  }) {
+  }, voiceMeta) {
     const employeeKey = normalizePersonName(employee);
+
+    if (voiceMeta?.scanId) {
+      const original = voiceMeta.original || {};
+      const final = { employee, department, date, startTime, endTime };
+      const changed = ['employee', 'department', 'date', 'startTime', 'endTime']
+        .some((field) => String(final[field] || '') !== String(original[field] || ''));
+      const corrections = changed && voiceMeta.rawEmployee
+        ? [{
+            rawEmployee: voiceMeta.rawEmployee,
+            suggestedEmployee: original.employee,
+            rawDepartment: voiceMeta.rawDepartment || original.department,
+            original,
+            final
+          }]
+        : [];
+
+      const response = await fetch('/api/shifts/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scanId: voiceMeta.scanId,
+          corrections,
+          shifts: [{
+            business,
+            department,
+            employee,
+            employeeKey,
+            date,
+            startTime,
+            endTime,
+            durationHours
+          }]
+        })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || 'Sprachschicht konnte nicht gespeichert werden.');
+      }
+      if (!result.excelSynced) {
+        throw new Error(
+          'Schicht gespeichert, aber Excel-Synchronisierung fehlgeschlagen: ' +
+          (result.syncError || 'unbekannter Fehler')
+        );
+      }
+      return result;
+    }
 
     const existing = await base44.entities.Shift.filter({
       business,
@@ -195,7 +246,7 @@ export default function Home() {
       );
     }
 
-    await base44.entities.Shift.create({
+    return base44.entities.Shift.create({
       business,
       department,
       employee,

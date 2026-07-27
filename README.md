@@ -23,7 +23,10 @@ Independent migration of the previous Base44 work-time app to Cloudflare.
 - Google Sheets tab creation, data writing and formatting
 - Existing frontend flow migrated away from the Base44 SDK
 
-Photo schedule scanning is implemented with local OCR, Cloudflare Workers AI, and optional Groq/FreeModel fallbacks. Voice input still returns a clear Phase 2 message.
+Photo schedule scanning uses Google Gemini multimodal vision with optional local
+OCR hints. Voice entry uses Groq Whisper for transcription and Gemini for
+structured extraction, with automatic Gemini audio fallback. Both flows share
+the same correction learning and Google Sheets synchronization.
 
 ## Google Sheet
 
@@ -96,18 +99,16 @@ A new AI-powered photo scan feature allows users to upload shift schedule photos
    - Canvas API processes both copies locally before sending to the backend
 
 2. **OCR Processing**
-   - Tesseract.js runs optional German OCR locally in the browser
-   - Cloudflare Workers AI `toMarkdown` reads the original photographed handwriting
-   - Local OCR errors no longer block the cloud extraction path
+   - Gemini reads the original photographed handwriting directly
+   - Tesseract.js runs only for the optional detailed scan and supplies fallible OCR hints
+   - The normal fast path uses one multimodal AI call and does not wait for local OCR
 
 3. **AI Analysis** (Backend)
-   - Cloud image transcription and optional local OCR are structured by Llama 3.3 70B
+   - Gemini Flash returns one structured result for all uploaded images
    - The staff directory is never included in the extraction prompt, preventing roster hallucinations
    - Only rows with a handwritten name, start time, end time, and row evidence are accepted
    - The handwritten S./Summe value cross-checks the calculated duration
    - Every uploaded image is independent; filenames are audit labels only and never influence extraction or dates
-   - Groq Qwen 3.6 is used when configured and the primary provider is unavailable
-   - FreeModel remains an optional final fallback
    - Missing or invalid dates stay empty for review; they are never replaced with today's date
    - Staff names are matched only after extraction, using aliases, exact matches, or strict fuzzy limits
 
@@ -127,26 +128,32 @@ A new AI-powered photo scan feature allows users to upload shift schedule photos
    - Duplicate shifts are ignored safely
    - User corrections are stored idempotently; name and department aliases are applied to later scans
    - Google Sheets is updated before the save response returns, so no manual refresh/export is required
+   - Full-sheet rebuilds are serialized with a D1 lease so concurrent saves cannot clear each other
+
+### Voice entry
+
+- The browser records with `MediaRecorder` and sends a bounded audio data URL to the Worker.
+- Groq `whisper-large-v3-turbo` transcribes German, Persian, English, or mixed speech.
+- Gemini extracts one date and 24-hour time range against the server-side staff directory.
+- If Groq is unavailable, Gemini processes the audio directly.
+- Known and learned aliases are applied without merging numeric names such as `Amir2` with `Amir`.
+- The editable preview shows the transcript, review reasons, and calculated hours.
+- Confirming a corrected voice entry stores the correction and synchronizes Google Sheets immediately.
 
 ### Local Setup for Scanner
 
 1. Copy `.dev.vars.example` to `.dev.vars`.
 
-Cloudflare Workers AI uses the `AI` binding and requires no API key. Groq and
-FreeModel are optional fallbacks:
+Create free API keys for Gemini and Groq, then store them only in `.dev.vars`
+locally and as encrypted Worker secrets in production:
 
 ```bash
+GEMINI_API_KEY=your-gemini-api-key
 GROQ_API_KEY=your-groq-api-key
-GROQ_BASE_URL=https://api.groq.com/openai/v1
-GROQ_MODEL=qwen/qwen3.6-27b
-
-FREEMODEL_API_KEY=your-freemodel-api-key
-FREEMODEL_BASE_URL=https://api.freemodel.dev/v1
-FREEMODEL_MODEL=gpt-5.6-sol
 ```
 
-Get a Groq key from [console.groq.com/keys](https://console.groq.com/keys).
-FreeModel can be configured from [freemodel.dev](https://freemodel.dev).
+Get keys from [Google AI Studio](https://aistudio.google.com/app/apikey) and
+[Groq Console](https://console.groq.com/keys).
 
 2. Apply new D1 migration:
 
@@ -193,7 +200,7 @@ Response:
 ```json
 {
   "scanId": "uuid",
-  "provider": "workers-ai",
+  "provider": "gemini",
   "warnings": [],
   "shifts": [
     {
@@ -203,7 +210,7 @@ Response:
       "startTime": "09:00",
       "endTime": "17:00",
       "confidence": 0.95,
-      "source": "workers-ai",
+      "source": "gemini",
       "normalizedStart": "09:00",
       "normalizedEnd": "17:00",
       "matchedBusiness": "Shiraz",
@@ -231,19 +238,14 @@ Response:
 - Error messages sanitized to avoid API key leakage
 - All requests logged to audit trail
 
-### Provider Fallback
+### Provider behavior
 
-Provider order:
-
-1. Cloudflare image-to-Markdown plus Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`)
-2. Groq (`qwen/qwen3.6-27b`) when `GROQ_API_KEY` is configured
-3. FreeModel when `FREEMODEL_API_KEY` is configured
-4. Manual preview row when all automatic providers are unavailable or no evidenced row is found
-
-Retryable provider failures are retried once before moving to the next
-provider. A valid zero-row result is trusted instead of asking later providers
-to invent data. Malformed rows are skipped, uncertain rows are left unselected,
-and warnings are shown in the preview.
+- Gemini is the photo scanner and structured extraction provider.
+- Groq Whisper is the preferred voice transcription provider.
+- Gemini processes voice directly when Groq is temporarily unavailable.
+- A manual preview row is shown when no evidenced photo row is found.
+- Retryable provider failures are retried once. Malformed or uncertain rows are
+  not silently accepted and remain editable in the preview.
 
 ### Learning Aliases
 
@@ -259,22 +261,20 @@ Once a user corrects an employee name during preview, the mapping is learned:
 - `GOOGLE_CLIENT_EMAIL` = service account email
 - `GOOGLE_PRIVATE_KEY` = full private key with newlines
 - `GOOGLE_SPREADSHEET_ID` = spreadsheet ID (optional if in wrangler.jsonc)
-- `GROQ_API_KEY` = optional Groq fallback key
-- `FREEMODEL_API_KEY` = optional final fallback key
+- `GEMINI_API_KEY` = Gemini API key
+- `GROQ_API_KEY` = Groq API key
 
 **Cloudflare Secrets** (Encrypt & store in Cloudflare):
 - `GOOGLE_CLIENT_EMAIL` – Google service account email
 - `GOOGLE_PRIVATE_KEY` – Google service account private key (full PEM format)
-- `GROQ_API_KEY` – optional Groq authentication token
-- `FREEMODEL_API_KEY` – optional FreeModel authentication token
+- `GEMINI_API_KEY` – Gemini authentication token
+- `GROQ_API_KEY` – Groq authentication token
 
 **Cloudflare Variables** (Non-secret, in wrangler.jsonc):
-- `WORKERS_AI_MODEL` = `@cf/meta/llama-3.3-70b-instruct-fp8-fast` (conservative structured extraction)
-- `WORKERS_AI_VISION_MODEL` = `@cf/meta/llama-4-scout-17b-16e-instruct` (reserved vision model)
+- `GEMINI_BASE_URL` = `https://generativelanguage.googleapis.com/v1beta`
+- `GEMINI_MODEL` = `gemini-flash-latest`
 - `GROQ_BASE_URL` = `https://api.groq.com/openai/v1`
-- `GROQ_MODEL` = `qwen/qwen3.6-27b`
-- `FREEMODEL_BASE_URL` = `https://api.freemodel.dev/v1`
-- `FREEMODEL_MODEL` = `gpt-5.6-sol`
+- `GROQ_SPEECH_MODEL` = `whisper-large-v3-turbo`
 - `GOOGLE_SPREADSHEET_ID` = Spreadsheet ID
 - `GOOGLE_SHEET_URL` = Spreadsheet URL
 - `APP_TIMEZONE` = `Europe/Berlin` (optional)
@@ -283,13 +283,11 @@ Once a user corrects an employee name during preview, the mapping is learned:
 
 **Provider status:**
 - Open `/api/scan-shifts/status`
-- `workersAi` should be `true`
-- Groq and FreeModel show whether their optional secrets are configured
+- `gemini` and `groq` should both be `true`
 
 **All providers unavailable:**
 - The app opens a manual preview row instead of losing the scan
-- Check Workers AI usage and provider status
-- Add `GROQ_API_KEY` for an independent fallback
+- Check the Gemini and Groq secret status
 
 **OCR is slow:**
 - First run downloads Tesseract model (~60MB)

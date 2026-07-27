@@ -504,7 +504,7 @@ export async function updateGoogleSpreadsheet(
     {
       method: 'POST',
       body: JSON.stringify({
-        valueInputOption: 'USER_ENTERED',
+        valueInputOption: 'RAW',
         data: plans.map((plan) => ({
           range: `${escapeSheetTitle(plan.title)}!A1`,
           majorDimension: 'ROWS',

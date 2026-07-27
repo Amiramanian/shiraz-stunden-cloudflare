@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { Toaster } from '@/components/ui/toaster';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClientInstance } from '@/lib/query-client';
@@ -16,15 +15,6 @@ import ScanShiftsPage from '@/pages/worktime/ScanShiftsPage';
 import PageNotFound from '@/lib/PageNotFound';
 
 function App() {
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const applyTheme = (isDark) => document.documentElement.classList.toggle('dark', isDark);
-    applyTheme(media.matches);
-    const listener = (event) => applyTheme(event.matches);
-    media.addEventListener('change', listener);
-    return () => media.removeEventListener('change', listener);
-  }, []);
-
   return (
     <QueryClientProvider client={queryClientInstance}>
       <Router>

@@ -4,17 +4,17 @@ GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\
 GOOGLE_SPREADSHEET_ID=your_google_sheet_id
 GOOGLE_SHEET_URL=https://docs.google.com/spreadsheets/d/your_google_sheet_id/edit
 
-# FreeModel AI Integration (for schedule scanning with OCR)
-# Create a free account at https://freemodel.dev
-FREEMODEL_API_KEY=your-freemodel-api-key
-FREEMODEL_BASE_URL=https://api.freemodel.dev/v1
-FREEMODEL_MODEL=gpt-5.6-sol
+# Gemini handles both photo scans and voice entry.
+# Create a key at https://aistudio.google.com/app/apikey
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_MODEL=gemini-flash-latest
 
-# Optional Groq fallback
-# Create an API key at https://console.groq.com/keys
+# Groq transcribes voice; Gemini remains the automatic fallback.
+# Create a key at https://console.groq.com/keys
 GROQ_API_KEY=your-groq-api-key
 GROQ_BASE_URL=https://api.groq.com/openai/v1
-GROQ_MODEL=qwen/qwen3.6-27b
+GROQ_SPEECH_MODEL=whisper-large-v3-turbo
 
 # Optional
 APP_TIMEZONE=Europe/Berlin

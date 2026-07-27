@@ -22,6 +22,11 @@ import {
 import { exportReport } from './report';
 import { processScanRequest } from './scan-shifts';
 import { normalizePersonName } from './staff-config';
+import { processVoiceShift } from './voice-shifts';
+
+const DEFAULT_JSON_LIMIT = 1_000_000;
+const SCAN_JSON_LIMIT = 25_000_000;
+const VOICE_JSON_LIMIT = 9_000_000;
 
 function json(data: unknown, status = 200) {
   return Response.json(data, {
@@ -38,10 +43,36 @@ function errorResponse(error: unknown, status = 500) {
   return json({ error: message }, status);
 }
 
-async function readJson<T>(request: Request): Promise<T> {
+async function readJson<T>(request: Request, maxBytes = DEFAULT_JSON_LIMIT): Promise<T> {
   const contentType = request.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) throw new Error('JSON body required.');
-  return request.json() as Promise<T>;
+  const contentLength = Number(request.headers.get('content-length') || 0);
+  if (contentLength > maxBytes) throw new Error('Request body is too large.');
+  if (!request.body) throw new Error('JSON body required.');
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let body = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error('Request body is too large.');
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error('Invalid JSON body.');
+  }
 }
 
 function actorEmail(request: Request): string | null {
@@ -67,6 +98,15 @@ function requireString(value: unknown, field: string) {
 function validateDate(value: unknown) {
   const date = requireString(value, 'Datum');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Datum muss YYYY-MM-DD sein.');
+  const [year, month, day] = date.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    throw new Error('Ungültiges Datum.');
+  }
   return date;
 }
 
@@ -76,25 +116,30 @@ function validateTime(value: unknown, field: string) {
   return time;
 }
 
-function validateDuration(value: unknown) {
-  const duration = Number(value);
-  if (!Number.isFinite(duration) || duration < 0 || duration > 24) {
-    throw new Error('Ungültige Stundenzahl.');
-  }
-  return Math.round(duration * 100) / 100;
+function calculateDuration(startTime: string, endTime: string) {
+  const [startHour, startMinute] = startTime.split(':').map(Number);
+  const [endHour, endMinute] = endTime.split(':').map(Number);
+  const start = startHour * 60 + startMinute;
+  let end = endHour * 60 + endMinute;
+  if (end < start) end += 24 * 60;
+  const duration = Math.round(((end - start) / 60) * 100) / 100;
+  if (duration <= 0 || duration > 24) throw new Error('Ungültige Stundenzahl.');
+  return duration;
 }
 
 function parseShift(input: Partial<ShiftRecord>): Omit<ShiftRecord, 'id'> {
   const employee = requireString(input.employee, 'Mitarbeiter');
+  const startTime = validateTime(input.startTime, 'Startzeit');
+  const endTime = validateTime(input.endTime, 'Endzeit');
   return {
     business: validateBusiness(input.business),
     department: requireString(input.department, 'Abteilung'),
     employee,
-    employeeKey: input.employeeKey ? requireString(input.employeeKey, 'employeeKey') : normalizePersonName(employee),
+    employeeKey: normalizePersonName(employee),
     date: validateDate(input.date),
-    startTime: validateTime(input.startTime, 'Startzeit'),
-    endTime: validateTime(input.endTime, 'Endzeit'),
-    durationHours: validateDuration(input.durationHours)
+    startTime,
+    endTime,
+    durationHours: calculateDuration(startTime, endTime)
   };
 }
 
@@ -234,9 +279,21 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
         scanId?: string;
         corrections?: ScanCorrectionInput[];
       }>(request);
+      if (!Array.isArray(body.shifts) || body.shifts.length === 0) {
+        return json({ error: 'Mindestens eine Schicht ist erforderlich.' }, 400);
+      }
+      if (body.shifts.length > 100) {
+        return json({ error: 'Maximum 100 Schichten pro Anfrage.' }, 400);
+      }
+      if ((body.corrections || []).length > 100) {
+        return json({ error: 'Maximum 100 Korrekturen pro Anfrage.' }, 400);
+      }
       const shifts = (body.shifts || []).map(parseShift);
       const scanId = String(body.scanId || '').trim();
       const corrections = (body.corrections || []).map(parseScanCorrection);
+      if (new Set(shifts.map((shift) => shift.business)).size !== 1) {
+        return json({ error: 'Alle Schichten einer Scan-Anfrage müssen zum selben Betrieb gehören.' }, 400);
+      }
 
       if (scanId) {
         const scan = await env.DB.prepare(`
@@ -337,19 +394,14 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
 
     if (url.pathname === '/api/scan-shifts/status' && method === 'GET') {
       return json({
-        primaryProvider: 'workers-ai',
+        primaryProvider: 'gemini',
         providers: {
-          workersAi: Boolean(env.AI),
-          groq: Boolean(env.GROQ_API_KEY),
-          freeModel: Boolean(env.FREEMODEL_API_KEY)
+          gemini: Boolean(env.GEMINI_API_KEY),
+          groq: Boolean(env.GROQ_API_KEY)
         },
         models: {
-          workersAi: {
-            text: env.WORKERS_AI_MODEL,
-            vision: env.WORKERS_AI_VISION_MODEL
-          },
-          groq: env.GROQ_MODEL,
-          freeModel: env.FREEMODEL_MODEL
+          gemini: env.GEMINI_MODEL,
+          groqSpeech: env.GROQ_SPEECH_MODEL
         }
       });
     }
@@ -362,7 +414,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
         images?: string[];
         imageNames?: string[];
         ocrTexts?: string[];
-      }>(request);
+      }>(request, SCAN_JSON_LIMIT);
       
       const business = requireString(body.business, 'business') as 'Shiraz' | 'Djadoo' | 'Catering';
       const todayIso = requireString(body.todayIso, 'todayIso');
@@ -398,10 +450,15 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       return json(result, 201);
     }
 
-    if (url.pathname.startsWith('/api/voice/')) {
-      return json({
-        error: 'Spracheingabe wird in Phase 2 eingerichtet.'
-      }, 501);
+    if (url.pathname === '/api/voice/shift' && method === 'POST') {
+      const body = await readJson<{ audio?: unknown }>(request, VOICE_JSON_LIMIT);
+      const result = await processVoiceShift(env, body, email);
+      await logAudit(env, 'voice_shift', 'scan_history', result.scanId, {
+        audioBytes: result.audioBytes,
+        confidence: result.suggestion.confidence,
+        needsReview: result.suggestion.needsReview
+      }, email);
+      return json(result, 201);
     }
 
     return json({ error: 'API route not found.' }, 404);

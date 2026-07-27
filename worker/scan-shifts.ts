@@ -1,6 +1,6 @@
 import type { Env } from './types';
 // @ts-ignore - shared frontend/backend libs without type declarations
-import { normalizeForMatch, buildFlatStaffList, levenshtein } from '../src/lib/shiftMatching';
+import { normalizeForMatch, buildFlatStaffList } from '../src/lib/shiftMatching';
 // @ts-ignore - shared frontend/backend libs without type declarations
 import { calculateDurationHours, normalizeTimeString } from '../src/lib/timeUtils';
 import {
@@ -13,16 +13,24 @@ import {
 import { extractImageTexts } from './scan-image-ocr';
 import {
   normalizeScanDate,
-  parseWrittenHours
+  parseWrittenHours,
+  type NormalizedDate
 } from './scan-normalization';
-import { createScanHistory, updateScanHistory, getScanAlias } from './db';
+import { createScanHistory, updateScanHistory, getScanAlias, listStaff } from './db';
+import {
+  buildEffectiveStaffConfig,
+  canonicalScanDepartment,
+  hasScanTechnicalMarker,
+  isScanSectionHeading,
+  matchScannedStaff
+} from './staff-config';
 
 export type { ScannedShiftRaw } from './scan-providers';
 
 export interface ScanRequest {
   business: 'Shiraz' | 'Djadoo' | 'Catering';
   todayIso: string;
-  staffConfig: Record<string, Record<string, string[]>>;
+  staffConfig?: Record<string, Record<string, string[]>>;
   images: string[];
   imageNames?: string[];
   ocrTexts?: string[];
@@ -62,52 +70,17 @@ interface ProviderCandidate extends NormalizedProviderResult {
 }
 
 const MAX_IMAGE_COUNT = 10;
-const HEADER_WORDS = new Set([
-  'name',
-  'datum',
-  'tag',
-  'nr',
-  'von',
-  'bis',
-  'summe',
-  'stunden',
-  'service',
-  'kuche',
-  'kueche',
-  'kitchen',
-  'bar',
-  'fahrer',
-  'liefer',
-  'vorschuss',
-  'uberzahlung',
-  'uberweisung',
-  'technik',
-  'personal'
-]);
-
 function providerDisplayName(provider: ScanProviderName): string {
-  if (provider === 'workers-ai') return 'Cloudflare Workers AI';
-  if (provider === 'groq') return 'Groq';
-  return 'FreeModel';
+  return provider === 'gemini' ? 'Google Gemini' : provider;
 }
 
 function uniqueWarnings(warnings: string[]): string[] {
   return [...new Set(warnings.filter(Boolean))].slice(0, 30);
 }
 
-function asciiKey(value: unknown): string {
-  return String(value ?? '')
-    .normalize('NFKD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '')
-    .trim();
-}
-
 function isHeaderOrNote(employee: string, evidence: string): boolean {
-  const employeeKey = asciiKey(employee);
-  if (!employeeKey || !/\p{L}/u.test(employee)) return true;
-  if (HEADER_WORDS.has(employeeKey)) return true;
+  if (!employee || !/\p{L}/u.test(employee)) return true;
+  if (isScanSectionHeading(employee)) return true;
   if (
     /(?:vorschuss|überzahlung|uberzahlung|überweisung|uberweisung|zahlung|euro|€)/iu.test(
       `${employee} ${evidence}`
@@ -189,9 +162,6 @@ function validateRequest(request: ScanRequest): void {
     }
   }
 
-  if (!request.staffConfig || !request.staffConfig[request.business]) {
-    throw new Error('Invalid business or staff config');
-  }
   if (!['Shiraz', 'Djadoo', 'Catering'].includes(request.business)) {
     throw new Error('Invalid business value');
   }
@@ -227,7 +197,7 @@ function normalizedDocumentDates(
   return dates;
 }
 
-function normalizeProviderShifts(
+export function normalizeProviderShifts(
   output: ScanProviderOutput,
   provider: ScanProviderName,
   todayIso: string,
@@ -283,11 +253,12 @@ function normalizeProviderShifts(
     }
 
     const rawDate = String(shift.date || '').trim();
-    let normalizedDate = normalizeScanDate(rawDate, todayIso);
-    if (!normalizedDate.date) {
-      const documentDate = documentDates.get(imageIndex) || '';
-      normalizedDate = normalizeScanDate(documentDate, todayIso);
-    }
+    const documentDate = documentDates.get(imageIndex) || '';
+    const normalizedDate: NormalizedDate = rawDate
+      ? normalizeScanDate(rawDate, documentDate || todayIso)
+      : documentDate
+        ? { date: documentDate, usedFallback: false }
+        : normalizeScanDate('', todayIso);
     if (normalizedDate.warning) {
       warnings.push(`${employee}: ${normalizedDate.warning}`);
     }
@@ -349,95 +320,19 @@ function normalizeProviderShifts(
   };
 }
 
-function canonicalDepartment(
+function resolveExtractedDepartment(
   business: ScanRequest['business'],
-  rawDepartment: string,
+  shift: Pick<ScannedShiftRaw, 'department' | 'employee' | 'evidence'>,
   configuredDepartments: string[]
 ): string {
-  if (business === 'Djadoo') {
-    return configuredDepartments.includes('Personal')
-      ? 'Personal'
-      : configuredDepartments[0] || '';
-  }
-
-  const key = asciiKey(rawDepartment);
-  const aliases: Record<string, string[]> = {
-    bar: ['bar'],
-    kuche: ['kuche', 'kueche', 'kitchen'],
-    service: ['service'],
-    fahrer: ['fahrer', 'liefer', 'lieferer', 'driver'],
-    betriebsleiter: ['betriebsleiter', 'leitung'],
-    technik: ['technik', 'tech']
-  };
-
-  for (const department of configuredDepartments) {
-    const canonicalKey = asciiKey(department);
-    const accepted = aliases[canonicalKey] || [canonicalKey];
-    if (accepted.includes(key)) return department;
-  }
-  return '';
-}
-
-interface StrictStaffMatch {
-  employee: string;
-  department: string;
-  matched: boolean;
-}
-
-function findStrictStaffMatch(
-  rawEmployee: string,
-  extractedDepartment: string,
-  flatStaff: Array<{ business: string; department: string; employee: string }>
-): StrictStaffMatch {
-  const target = asciiKey(rawEmployee);
-  if (!target) {
-    return { employee: rawEmployee, department: extractedDepartment, matched: false };
-  }
-
-  const nonTechnical = flatStaff.filter((entry) => entry.department !== 'Technik');
-  const pool = nonTechnical.length > 0 ? nonTechnical : flatStaff;
-  const exact = pool.filter((entry) => asciiKey(entry.employee) === target);
-  if (exact.length > 0) {
-    const departmentMatch = exact.find((entry) => entry.department === extractedDepartment);
-    const selected = departmentMatch || exact[0];
-    return {
-      employee: selected.employee,
-      department: selected.department,
-      matched: true
-    };
-  }
-
-  if (target.length < 4) {
-    return { employee: rawEmployee, department: extractedDepartment, matched: false };
-  }
-
-  const scored = pool.map((entry) => ({
-    entry,
-    distance: levenshtein(asciiKey(entry.employee), target)
-  }));
-  const bestDistance = Math.min(...scored.map((candidate) => candidate.distance));
-  const bestEmployees = new Set(
-    scored
-      .filter((candidate) => candidate.distance === bestDistance)
-      .map((candidate) => asciiKey(candidate.entry.employee))
-  );
-  const maxDistance = target.length >= 8 ? 2 : 1;
-  const ratio = bestDistance / Math.max(target.length, 1);
-
-  if (bestDistance > maxDistance || ratio > 0.2 || bestEmployees.size !== 1) {
-    return { employee: rawEmployee, department: extractedDepartment, matched: false };
-  }
-
-  const candidates = scored.filter((candidate) => candidate.distance === bestDistance);
-  const departmentMatch = candidates.find(
-    (candidate) => candidate.entry.department === extractedDepartment
-  );
-  const selected = (departmentMatch || candidates[0]).entry;
-  return {
-    employee: selected.employee,
-    department: selected.department,
-    matched: true
-  };
+  const rawDepartment = hasScanTechnicalMarker(
+    shift.department || '',
+    shift.employee || '',
+    shift.evidence || ''
+  )
+    ? 'Technik'
+    : shift.department || '';
+  return canonicalScanDepartment(business, rawDepartment, configuredDepartments);
 }
 
 export async function processScanRequest(
@@ -456,11 +351,7 @@ export async function processScanRequest(
     await createScanHistory(env, scanId, request.business, actorEmail, request.images.length);
     historyCreated = true;
 
-    const imageExtraction = await extractImageTexts(
-      env,
-      request.images,
-      localOcrTexts
-    );
+    const imageExtraction = await extractImageTexts(request.images, localOcrTexts);
     await updateScanHistory(env, scanId, {
       ocrText: imageExtraction.texts
         .map((text, index) => `--- image ${index + 1}: ${imageNames[index]} ---\n${text}`)
@@ -470,6 +361,7 @@ export async function processScanRequest(
 
     const providers = getAvailableScanProviders(env);
     const providerWarnings: string[] = [...imageExtraction.warnings];
+    const providerFailures: Array<{ provider: string; message: string }> = [];
     let candidate: ProviderCandidate | null = null;
 
     for (const provider of providers) {
@@ -493,11 +385,18 @@ export async function processScanRequest(
         };
         break;
       } catch (error) {
+        const failureMessage = error instanceof Error
+          ? error.message
+              .replace(/Bearer\s+[^\s]+/gi, '[REDACTED]')
+              .replace(/\b(?:gsk_|fe_oa_|sk-)[A-Za-z0-9_-]+/g, '[REDACTED]')
+              .slice(0, 500)
+          : 'unknown';
         console.warn(JSON.stringify({
           event: 'scan_provider_failed',
           provider,
-          message: error instanceof Error ? error.message.slice(0, 180) : 'unknown'
+          message: failureMessage.slice(0, 180)
         }));
+        providerFailures.push({ provider, message: failureMessage });
         providerWarnings.push(
           `${providerDisplayName(provider)} war nicht verfügbar; der nächste Dienst wurde versucht.`
         );
@@ -513,6 +412,7 @@ export async function processScanRequest(
         status: 'error',
         skippedCount: 0,
         savedCount: 0,
+        aiResponseJson: JSON.stringify({ failures: providerFailures }),
         errorMessage: warnings.join(' ')
       });
       return {
@@ -533,21 +433,23 @@ export async function processScanRequest(
       })
     });
 
-    const scopedConfig = { [request.business]: request.staffConfig[request.business] };
+    const serverStaff = await listStaff(env);
+    const serverStaffConfig = buildEffectiveStaffConfig(serverStaff);
+    const scopedConfig = { [request.business]: serverStaffConfig[request.business] };
     const flatStaff = buildFlatStaffList(scopedConfig) as Array<{
       business: string;
       department: string;
       employee: string;
     }>;
-    const configuredDepartments = Object.keys(request.staffConfig[request.business] || {});
+    const configuredDepartments = Object.keys(serverStaffConfig[request.business] || {});
 
     const enrichedShifts = await Promise.all(
       candidate.shifts.map(async (shift): Promise<EnrichedShift> => {
         const rawEmployee = shift.employee;
         const normalizedRawName = normalizeForMatch(rawEmployee);
-        const extractedDepartment = canonicalDepartment(
+        const extractedDepartment = resolveExtractedDepartment(
           request.business,
-          shift.department || '',
+          shift,
           configuredDepartments
         );
         const alias = await getScanAlias(
@@ -557,30 +459,12 @@ export async function processScanRequest(
           normalizedRawName
         );
 
-        let match: StrictStaffMatch;
-        if (alias) {
-          const aliasEntries = flatStaff.filter(
-            (entry) => normalizeForMatch(entry.employee) === normalizeForMatch(alias.employee)
-          );
-          const selected = aliasEntries.find(
-            (entry) => entry.department === alias.department
-          ) || aliasEntries.find(
-            (entry) => entry.department === extractedDepartment
-          ) || aliasEntries.find((entry) => entry.department !== 'Technik') || aliasEntries[0];
-          match = selected
-            ? {
-              employee: selected.employee,
-              department: selected.department,
-              matched: true
-            }
-            : {
-              employee: alias.employee,
-              department: alias.department || extractedDepartment,
-              matched: true
-            };
-        } else {
-          match = findStrictStaffMatch(rawEmployee, extractedDepartment, flatStaff);
-        }
+        const match = matchScannedStaff(
+          rawEmployee,
+          extractedDepartment,
+          flatStaff,
+          alias
+        );
 
         const reviewReasons: string[] = [];
         if (!match.matched) reviewReasons.push('Name konnte nicht sicher zugeordnet werden');

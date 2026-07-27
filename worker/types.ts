@@ -4,8 +4,8 @@ export interface Env extends Cloudflare.Env {
   GOOGLE_CLIENT_EMAIL: string;
   GOOGLE_PRIVATE_KEY: string;
 
-  FREEMODEL_API_KEY: string;
-  GROQ_API_KEY?: string;
+  GEMINI_API_KEY: string;
+  GROQ_API_KEY: string;
 }
 
 export interface ShiftRecord {
@@ -45,7 +45,7 @@ export interface ScannedShift {
   startTime: string;
   endTime: string;
   confidence?: number;
-  source?: 'workers-ai' | 'groq' | 'freemodel' | 'ocr' | 'merged' | 'manual';
+  source?: 'gemini' | 'ocr' | 'merged' | 'manual';
 }
 
 export interface ScanShiftsRequest {

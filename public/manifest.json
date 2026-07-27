@@ -1,0 +1,11 @@
+{
+  "name": "Shiraz Stunden",
+  "short_name": "Stunden",
+  "description": "Arbeitszeiterfassung für Shiraz, Djadoo und Catering",
+  "lang": "de",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f5f5",
+  "theme_color": "#0f172a"
+}
