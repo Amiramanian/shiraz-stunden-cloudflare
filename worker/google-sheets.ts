@@ -235,6 +235,26 @@ function borderStyle(): Record<string, string | Record<string, number>> {
   return { style: 'SOLID', color: COLORS.border };
 }
 
+function contentAwareColumnWidth(
+  plan: SheetPlan,
+  columnIndex: number,
+  offset: number
+): number {
+  const longestValue = plan.values.reduce((longest, row) => {
+    const value = String(row[columnIndex] ?? '').trim();
+    const longestLine = value
+      .split(/\r?\n/)
+      .reduce((length, line) => Math.max(length, line.length), 0);
+    return Math.max(longest, longestLine);
+  }, 0);
+  const minimumWidths = [105, 72, 82, 72];
+  const maximumWidths = [135, 110, 220, 110];
+  return Math.min(
+    maximumWidths[offset],
+    Math.max(minimumWidths[offset], longestValue * 7 + 24)
+  );
+}
+
 /**
  * Builds batchUpdate formatting requests for a sheet
  */
@@ -297,17 +317,27 @@ function buildFormattingRequests(
         fields: 'userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat.foregroundColor,textFormat.fontFamily,textFormat.fontSize,borders)'
       }
     },
-    // Use consistent row heights throughout every generated sheet
+    // Fit rows and non-employee columns to their actual content. Employee
+    // columns are capped below so long notes remain readable without making
+    // the report excessively wide.
     {
-      updateDimensionProperties: {
-        range: {
+      autoResizeDimensions: {
+        dimensions: {
           sheetId,
           dimension: 'ROWS',
           startIndex: 0,
-          endIndex: rowCount
-        },
-        properties: { pixelSize: 26 },
-        fields: 'pixelSize'
+          endIndex: dataRows
+        }
+      }
+    },
+    {
+      autoResizeDimensions: {
+        dimensions: {
+          sheetId,
+          dimension: 'COLUMNS',
+          startIndex: 0,
+          endIndex: columnCount
+        }
       }
     },
     {
@@ -319,6 +349,18 @@ function buildFormattingRequests(
           endIndex: 1
         },
         properties: { pixelSize: 34 },
+        fields: 'pixelSize'
+      }
+    },
+    {
+      updateDimensionProperties: {
+        range: {
+          sheetId,
+          dimension: 'ROWS',
+          startIndex: 1,
+          endIndex: Math.min(2, dataRows)
+        },
+        properties: { pixelSize: 28 },
         fields: 'pixelSize'
       }
     },
@@ -403,8 +445,15 @@ function buildFormattingRequests(
         });
       }
 
-      // Set column widths for employee block
-      const widths = [110, 80, 80, 80, 12];
+      // Keep compact employee blocks while expanding columns that contain
+      // longer values such as notes.
+      const widths = [
+        contentAwareColumnWidth(plan, block.startColumn, 0),
+        contentAwareColumnWidth(plan, block.startColumn + 1, 1),
+        contentAwareColumnWidth(plan, block.startColumn + 2, 2),
+        contentAwareColumnWidth(plan, block.startColumn + 3, 3),
+        12
+      ];
       widths.forEach((pixelSize, offset) => {
         requests.push({
           updateDimensionProperties: {
