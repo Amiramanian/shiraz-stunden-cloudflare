@@ -47,7 +47,7 @@
   "vars": {
     "APP_TIMEZONE": "Europe/Berlin",
     "GOOGLE_SPREADSHEET_ID": "1XmfVLnebQ7NdLV2qh2nJ_qgPQPIQdqkgw178ZfCyyuY",
-    "GOOGLE_SHEET_URL": "https://docs.google.com/spreadsheets/d/1XmfVLnebQ7NdLV2qh2nJ_qgPQPIQdqkgw178ZfCyyuY/edit",
+    "GOOGLE_SHEET_URL": "https://docs.google.com/spreadsheets/d/1XmfVLnebQ7NdLV2qh2nJ_qgPQPIQdqkgw178ZfCyyuY/preview",
     "GEMINI_BASE_URL": "https://generativelanguage.googleapis.com/v1beta",
     "GEMINI_MODEL": "gemini-flash-latest",
     "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
