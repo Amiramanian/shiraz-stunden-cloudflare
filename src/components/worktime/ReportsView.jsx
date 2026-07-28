@@ -51,7 +51,7 @@ export default function ReportsView({ onBack }) {
     setMessage('');
     try {
       await base44.functions.invoke('exportToGoogleDrive', {});
-      setMessage('Die Datei „کارکنان“ wurde aktualisiert.');
+      setMessage('Die Datei „Arbeitszeiten – Shiraz & Djadoo“ wurde aktualisiert.');
       await load();
     } catch (error) {
       const rawMessage = error instanceof Error ? error.message : String(error);
@@ -86,7 +86,7 @@ export default function ReportsView({ onBack }) {
           />
           <StatusRow
             ok={Boolean(status?.googleSheet?.spreadsheetId)}
-            label="Google Sheet کارکنان"
+            label="Google Sheet: Arbeitszeiten – Shiraz & Djadoo"
             detail={status?.googleSheet?.spreadsheetId || 'Spreadsheet-ID fehlt'}
           />
           <StatusRow
@@ -114,7 +114,7 @@ export default function ReportsView({ onBack }) {
           className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-800 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-blue-700"
         >
           <FileSpreadsheet size={22} />
-          کارکنان öffnen
+          Arbeitszeiten öffnen
         </a>
       ) : (
         !loading && <div className="py-5 text-center text-neutral-500">Google Sheet ist noch nicht verbunden.</div>

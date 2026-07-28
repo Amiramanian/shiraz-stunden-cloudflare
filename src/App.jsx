@@ -14,27 +14,30 @@ import ReportsPage from '@/pages/worktime/ReportsPage';
 import ManagePage from '@/pages/worktime/ManagePage';
 import ScanShiftsPage from '@/pages/worktime/ScanShiftsPage';
 import PageNotFound from '@/lib/PageNotFound';
+import AuthGate from '@/components/auth/AuthGate';
 
 function App() {
   return (
     <QueryClientProvider client={queryClientInstance}>
-      <Router>
-        <ScrollToTop />
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<BusinessPage />} />
-            <Route path="department" element={<DepartmentPage />} />
-            <Route path="employee" element={<EmployeePage />} />
-            <Route path="shift" element={<ShiftPage />} />
-            <Route path="hinweis-employee" element={<HinweisEmployeePage />} />
-            <Route path="hinweis" element={<HinweisPage />} />
-            <Route path="reports" element={<ReportsPage />} />
-            <Route path="manage" element={<ManagePage />} />
-            <Route path="scan-shifts" element={<ScanShiftsPage />} />
-          </Route>
-          <Route path="*" element={<PageNotFound />} />
-        </Routes>
-      </Router>
+      <AuthGate>
+        <Router>
+          <ScrollToTop />
+          <Routes>
+            <Route path="/" element={<Home />}>
+              <Route index element={<BusinessPage />} />
+              <Route path="department" element={<DepartmentPage />} />
+              <Route path="employee" element={<EmployeePage />} />
+              <Route path="shift" element={<ShiftPage />} />
+              <Route path="hinweis-employee" element={<HinweisEmployeePage />} />
+              <Route path="hinweis" element={<HinweisPage />} />
+              <Route path="reports" element={<ReportsPage />} />
+              <Route path="manage" element={<ManagePage />} />
+              <Route path="scan-shifts" element={<ScanShiftsPage />} />
+            </Route>
+            <Route path="*" element={<PageNotFound />} />
+          </Routes>
+        </Router>
+      </AuthGate>
       <Toaster />
     </QueryClientProvider>
   );

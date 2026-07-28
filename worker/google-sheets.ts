@@ -191,6 +191,10 @@ interface SheetMetadata {
       hidden?: boolean;
       gridProperties?: { rowCount?: number; columnCount?: number };
     };
+    protectedRanges?: Array<{
+      protectedRangeId: number;
+      description?: string;
+    }>;
   }>;
 }
 
@@ -200,9 +204,12 @@ const COLORS = {
   white: { red: 1, green: 1, blue: 1 },
   lightBlue: { red: 0.88, green: 0.93, blue: 0.98 },
   headerBlue: { red: 0.75, green: 0.84, blue: 0.94 },
+  separatorBlue: { red: 0.12, green: 0.29, blue: 0.52 },
   yellow: { red: 1, green: 0.9, blue: 0.6 },
   border: { red: 0.35, green: 0.35, blue: 0.35 }
 };
+
+const PROTECTION_PREFIX = 'Von der Website verwaltet: ';
 
 /**
  * Builds full grid range for a sheet
@@ -255,9 +262,13 @@ function buildFormattingRequests(
         properties: {
           sheetId,
           hidden: Boolean(plan.hidden),
-          gridProperties: { rowCount, columnCount }
+          gridProperties: {
+            rowCount,
+            columnCount,
+            frozenRowCount: plan.title.startsWith('Bearbeiten_') ? 1 : 2
+          }
         },
-        fields: 'hidden,gridProperties(rowCount,columnCount)'
+        fields: 'hidden,gridProperties(rowCount,columnCount,frozenRowCount)'
       }
     },
     // Format data rows with light blue background and borders
@@ -270,7 +281,11 @@ function buildFormattingRequests(
             horizontalAlignment: 'CENTER',
             verticalAlignment: 'MIDDLE',
             wrapStrategy: 'WRAP',
-            textFormat: { foregroundColor: COLORS.black },
+            textFormat: {
+              foregroundColor: COLORS.black,
+              fontFamily: 'Arial',
+              fontSize: 10
+            },
             borders: {
               top: borderStyle(),
               bottom: borderStyle(),
@@ -279,7 +294,32 @@ function buildFormattingRequests(
             }
           }
         },
-        fields: 'userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat.foregroundColor,borders)'
+        fields: 'userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,wrapStrategy,textFormat.foregroundColor,textFormat.fontFamily,textFormat.fontSize,borders)'
+      }
+    },
+    // Use consistent row heights throughout every generated sheet
+    {
+      updateDimensionProperties: {
+        range: {
+          sheetId,
+          dimension: 'ROWS',
+          startIndex: 0,
+          endIndex: rowCount
+        },
+        properties: { pixelSize: 26 },
+        fields: 'pixelSize'
+      }
+    },
+    {
+      updateDimensionProperties: {
+        range: {
+          sheetId,
+          dimension: 'ROWS',
+          startIndex: 0,
+          endIndex: 1
+        },
+        properties: { pixelSize: 34 },
+        fields: 'pixelSize'
       }
     },
     // Format first row (title row) with black background and white bold text
@@ -364,7 +404,7 @@ function buildFormattingRequests(
       }
 
       // Set column widths for employee block
-      const widths = [110, 80, 80, 80, 28];
+      const widths = [110, 80, 80, 80, 12];
       widths.forEach((pixelSize, offset) => {
         requests.push({
           updateDimensionProperties: {
@@ -378,6 +418,31 @@ function buildFormattingRequests(
             fields: 'pixelSize'
           }
         });
+      });
+
+      // The fifth column is intentionally empty and acts as a colored separator
+      // between employees. This keeps the data grid intact while making blocks
+      // easier to scan visually.
+      requests.push({
+        repeatCell: {
+          range: {
+            sheetId,
+            startRowIndex: 0,
+            endRowIndex: dataRows,
+            startColumnIndex: block.startColumn + 4,
+            endColumnIndex: block.startColumn + 5
+          },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: COLORS.separatorBlue,
+              borders: {
+                left: { style: 'SOLID', color: COLORS.separatorBlue },
+                right: { style: 'SOLID', color: COLORS.separatorBlue }
+              }
+            }
+          },
+          fields: 'userEnteredFormat(backgroundColor,borders.left,borders.right)'
+        }
       });
     }
   } else if (!plan.title.startsWith('Bearbeiten_')) {
@@ -421,6 +486,59 @@ function buildFormattingRequests(
   return requests;
 }
 
+function buildProtectionRequests(
+  env: Env,
+  plans: SheetPlan[],
+  metadata: SheetMetadata
+): Record<string, unknown>[] {
+  if (!env.GOOGLE_CLIENT_EMAIL) {
+    throw new Error('GOOGLE_CLIENT_EMAIL is not configured.');
+  }
+
+  const metadataByTitle = new Map(
+    metadata.sheets.map((sheet) => [sheet.properties.title, sheet])
+  );
+  const requests: Record<string, unknown>[] = [];
+
+  for (const plan of plans) {
+    const sheet = metadataByTitle.get(plan.title);
+    if (!sheet) continue;
+
+    const description = `${PROTECTION_PREFIX}${plan.title}`;
+    const existing = sheet.protectedRanges?.find(
+      (protectedRange) => protectedRange.description === description
+    );
+    const protectedRange = {
+      range: { sheetId: sheet.properties.sheetId },
+      description,
+      warningOnly: false,
+      editors: {
+        users: [env.GOOGLE_CLIENT_EMAIL]
+      }
+    };
+
+    if (existing) {
+      requests.push({
+        updateProtectedRange: {
+          protectedRange: {
+            protectedRangeId: existing.protectedRangeId,
+            ...protectedRange
+          },
+          fields: 'range,description,warningOnly,editors'
+        }
+      });
+    } else {
+      requests.push({
+        addProtectedRange: {
+          protectedRange
+        }
+      });
+    }
+  }
+
+  return requests;
+}
+
 /**
  * Main export function: Updates Google Spreadsheet with plans
  * Creates missing sheets, clears existing data, writes new data, and applies formatting
@@ -437,7 +555,7 @@ export async function updateGoogleSpreadsheet(
   // Fetch existing sheets metadata
   let metadata = await googleFetch<SheetMetadata>(
     env,
-    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets.properties`
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties,protectedRanges(protectedRangeId,description))`
   );
 
   const existingTitles = new Set(
@@ -477,7 +595,7 @@ export async function updateGoogleSpreadsheet(
     // Refresh metadata to get new sheet IDs
     metadata = await googleFetch<SheetMetadata>(
       env,
-      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets.properties`
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties,protectedRanges(protectedRangeId,description))`
     );
   }
 
@@ -523,6 +641,7 @@ export async function updateGoogleSpreadsheet(
     }
     formattingRequests.push(...buildFormattingRequests(plan, sheetId));
   }
+  formattingRequests.push(...buildProtectionRequests(env, plans, metadata));
 
   // Apply formatting requests in batches (Google API limits request size)
   const chunkSize = 300;

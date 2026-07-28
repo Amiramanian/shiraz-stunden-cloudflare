@@ -29,18 +29,27 @@ import { exportReport } from './report';
 import { processScanRequest } from './scan-shifts';
 import { normalizePersonName } from './staff-config';
 import { processVoiceShift } from './voice-shifts';
+import {
+  clearExpiredAuthSessions,
+  clearSessionCookie,
+  createAuthSession,
+  createSessionCookie,
+  deleteAuthSession,
+  hasValidAuthSession,
+  securelyMatchesPin
+} from './auth';
 
 const DEFAULT_JSON_LIMIT = 1_000_000;
 const SCAN_JSON_LIMIT = 25_000_000;
 const VOICE_JSON_LIMIT = 9_000_000;
 
-function json(data: unknown, status = 200) {
+function json(data: unknown, status = 200, extraHeaders?: HeadersInit) {
+  const headers = new Headers(extraHeaders);
+  headers.set('Cache-Control', 'no-store');
+  headers.set('X-Content-Type-Options', 'nosniff');
   return Response.json(data, {
     status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff'
-    }
+    headers
   });
 }
 
@@ -85,9 +94,20 @@ function actorEmail(request: Request): string | null {
   return request.headers.get('Cf-Access-Authenticated-User-Email') || null;
 }
 
-function isApiAuthorized(request: Request, env: Env) {
-  if ((env.REQUIRE_ACCESS || 'false').toLowerCase() !== 'true') return true;
-  return Boolean(request.headers.get('Cf-Access-Authenticated-User-Email'));
+async function authorizeRequest(request: Request, env: Env) {
+  const accessEmail = actorEmail(request);
+  if ((env.REQUIRE_ACCESS || 'false').toLowerCase() === 'true') {
+    return {
+      authorized: Boolean(accessEmail),
+      actor: accessEmail
+    };
+  }
+
+  const authorized = await hasValidAuthSession(request, env);
+  return {
+    authorized,
+    actor: authorized ? 'pin-admin' : null
+  };
 }
 
 function validateBusiness(value: unknown): ShiftRecord['business'] {
@@ -207,6 +227,59 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     return json({ status: 'ok', app: 'shiraz-stunden', time: new Date().toISOString() });
   }
 
+  if (url.pathname === '/api/auth/status' && method === 'GET') {
+    const authorization = await authorizeRequest(request, env);
+    return json({
+      authenticated: authorization.authorized,
+      configured: Boolean(env.APP_PIN) ||
+        (env.REQUIRE_ACCESS || 'false').toLowerCase() === 'true'
+    });
+  }
+
+  if (url.pathname === '/api/auth/login' && method === 'POST') {
+    if (!env.APP_PIN) return json({ error: 'PIN-Zugang ist nicht eingerichtet.' }, 503);
+
+    const clientKey = request.headers.get('CF-Connecting-IP') || 'local-client';
+    const rateLimit = await env.LOGIN_RATE_LIMITER.limit({ key: `pin-login:${clientKey}` });
+    if (!rateLimit.success) {
+      return json({ error: 'Zu viele Versuche. Bitte eine Minute warten.' }, 429);
+    }
+
+    try {
+      const body = await readJson<{ pin?: unknown }>(request);
+      const submittedPin = String(body.pin ?? '');
+      if (
+        !/^\d{4}$/.test(submittedPin) ||
+        !await securelyMatchesPin(submittedPin, env.APP_PIN)
+      ) {
+        return json({ error: 'PIN ist nicht korrekt.' }, 401);
+      }
+
+      const token = await createAuthSession(env);
+      await logAudit(env, 'login', 'auth_session', null, { method: 'pin' }, 'pin-admin');
+      return json(
+        { authenticated: true },
+        200,
+        { 'Set-Cookie': createSessionCookie(token) }
+      );
+    } catch (error) {
+      return errorResponse(error, 400);
+    }
+  }
+
+  if (url.pathname === '/api/auth/logout' && method === 'POST') {
+    await deleteAuthSession(request, env);
+    return json(
+      { authenticated: false },
+      200,
+      { 'Set-Cookie': clearSessionCookie() }
+    );
+  }
+
+  const authorization = await authorizeRequest(request, env);
+  if (!authorization.authorized) return json({ error: 'Unauthorized' }, 401);
+  const email = authorization.actor;
+
   if (url.pathname === '/api/setup-status' && method === 'GET') {
     const tableRows = await env.DB.prepare(`
       SELECT name FROM sqlite_master
@@ -232,15 +305,13 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       },
       accessProtection: {
         required: (env.REQUIRE_ACCESS || 'false').toLowerCase() === 'true',
-        authenticatedEmail: actorEmail(request)
+        authenticatedEmail: actorEmail(request),
+        pinProtected: Boolean(env.APP_PIN)
       },
       lastExport: lastExport || null,
       time: new Date().toISOString()
     });
   }
-
-  if (!isApiAuthorized(request, env)) return json({ error: 'Unauthorized' }, 401);
-  const email = actorEmail(request);
 
   try {
     if (url.pathname === '/api/me' && method === 'GET') {
@@ -570,6 +641,9 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(exportReport(env, 'scheduled'));
+    ctx.waitUntil(Promise.all([
+      exportReport(env, 'scheduled'),
+      clearExpiredAuthSessions(env)
+    ]).then(() => undefined));
   }
 } satisfies ExportedHandler<Env>;

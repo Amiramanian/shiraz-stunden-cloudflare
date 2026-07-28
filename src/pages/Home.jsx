@@ -9,6 +9,7 @@ import {
 } from '@/lib/staffConfig';
 import TabNavigation from '@/components/worktime/TabNavigation';
 import PullToRefresh from '@/components/PullToRefresh';
+import { LogOut } from 'lucide-react';
 
 const APP_TITLE = 'Arbeitszeiten Personal Shiraz';
 
@@ -362,6 +363,15 @@ export default function Home() {
     >
       <div className="max-w-2xl mx-auto">
         <div className="bg-white rounded-3xl p-6 shadow-md mb-5 text-center relative">
+          <button
+            type="button"
+            onClick={() => void base44.auth.logout()}
+            className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-xl text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-800"
+            aria-label="Abmelden"
+            title="Abmelden"
+          >
+            <LogOut size={20} aria-hidden="true" />
+          </button>
           <h1 className="text-2xl font-bold text-neutral-900">
             {APP_TITLE}
           </h1>

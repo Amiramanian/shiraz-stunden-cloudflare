@@ -9,6 +9,9 @@ async function api(path, options = {}) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+      window.dispatchEvent(new Event('shiraz:unauthorized'));
+    }
     const error = new Error(payload.error || `Request failed (${response.status})`);
     error.status = response.status;
     throw error;
@@ -57,7 +60,8 @@ export const base44 = {
     async me() {
       return api('/api/me');
     },
-    logout() {
+    async logout() {
+      await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
       window.location.assign('/');
     }
   },

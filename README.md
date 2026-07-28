@@ -7,7 +7,7 @@ Independent migration of the previous Base44 work-time app to Cloudflare.
 - React/Vite frontend (same work-time flow as the previous app)
 - Cloudflare Worker API
 - Cloudflare D1 database
-- One Google Sheet named `کارکنان`
+- One Google Sheet named `Arbeitszeiten – Shiraz & Djadoo`
 - Nightly Cloudflare Cron export to the same Google Sheet
 - Cloudflare Access will protect the production domain
 
@@ -56,8 +56,9 @@ The spreadsheet already contains these tabs:
 2. Database ID is configured: `4d83d2e4-f227-4e77-b081-20600267ac00`
 3. Migration applied successfully in the Cloudflare D1 Console (6 tables)
 4. Create a Google Cloud service account and enable Google Sheets API
-5. Share the Google Sheet `کارکنان` with the service-account email as Editor
+5. Share the Google Sheet `Arbeitszeiten – Shiraz & Djadoo` with the service-account email as Editor
 6. Add Worker secrets:
+   - `APP_PIN`
    - `GOOGLE_CLIENT_EMAIL`
    - `GOOGLE_PRIVATE_KEY`
 7. Deploy: `npm run deploy`
@@ -237,6 +238,9 @@ Response:
 - Business value whitelisted
 - Error messages sanitized to avoid API key leakage
 - All requests logged to audit trail
+- All data APIs require a valid server-side PIN session (or Cloudflare Access)
+- PIN sessions are random, stored as hashes in D1, expire after seven days, and use an HttpOnly/Secure/SameSite cookie
+- PIN login attempts are rate-limited to five per minute per client address
 
 ### Provider behavior
 
@@ -265,6 +269,7 @@ Once a user corrects an employee name during preview, the mapping is learned:
 - `GROQ_API_KEY` = Groq API key
 
 **Cloudflare Secrets** (Encrypt & store in Cloudflare):
+- `APP_PIN` – four-digit application login PIN
 - `GOOGLE_CLIENT_EMAIL` – Google service account email
 - `GOOGLE_PRIVATE_KEY` – Google service account private key (full PEM format)
 - `GEMINI_API_KEY` – Gemini authentication token

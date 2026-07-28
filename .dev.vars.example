@@ -20,3 +20,6 @@ GROQ_SPEECH_MODEL=whisper-large-v3-turbo
 APP_TIMEZONE=Europe/Berlin
 REQUIRE_ACCESS=false
 
+# Required PIN login. Store the real value only in .dev.vars and as a Worker secret.
+APP_PIN=choose-a-four-digit-pin
+

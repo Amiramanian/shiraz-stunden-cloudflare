@@ -1,5 +1,7 @@
 export interface Env extends Cloudflare.Env {
   REQUIRE_ACCESS?: string;
+  APP_PIN: string;
+  LOGIN_RATE_LIMITER: RateLimit;
 
   GOOGLE_CLIENT_EMAIL: string;
   GOOGLE_PRIVATE_KEY: string;
