@@ -1,5 +1,5 @@
 import React from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext } from 'react-router';
 import HinweisEmployeeStep from '@/components/worktime/HinweisEmployeeStep';
 
 export default function HinweisEmployeePage() {

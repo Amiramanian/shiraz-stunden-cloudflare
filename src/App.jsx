@@ -1,7 +1,7 @@
 import { Toaster } from '@/components/ui/toaster';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClientInstance } from '@/lib/query-client';
-import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
+import { BrowserRouter as Router, Route, Routes } from 'react-router';
 import ScrollToTop from '@/components/ScrollToTop';
 import Home from '@/pages/Home';
 import BusinessPage from '@/pages/worktime/BusinessPage';

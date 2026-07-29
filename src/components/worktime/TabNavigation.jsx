@@ -1,5 +1,5 @@
 import React from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { Clock, BarChart3, Database } from 'lucide-react';
 
 export default function TabNavigation() {

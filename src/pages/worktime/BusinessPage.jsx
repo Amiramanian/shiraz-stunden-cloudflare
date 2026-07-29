@@ -1,5 +1,5 @@
 import React from 'react';
-import { useOutletContext, useNavigate } from 'react-router-dom';
+import { useOutletContext, useNavigate } from 'react-router';
 import BusinessStep from '@/components/worktime/BusinessStep';
 
 export default function BusinessPage() {

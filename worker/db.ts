@@ -5,6 +5,11 @@ import type {
   ShiftRecord,
   StaffMemberRecord
 } from './types';
+import {
+  changesScanIdentity,
+  getChangedCorrectionFields,
+  isActualScanCorrection
+} from './scan-corrections.ts';
 
 function mapShift(row: Record<string, unknown>): ShiftRecord {
   return {
@@ -492,6 +497,10 @@ export async function recordScanCorrection(
   business: string,
   correction: ScanCorrectionInput
 ) {
+  if (!isActualScanCorrection(correction)) {
+    return { inserted: false, aliasLearned: false, changedFields: [] };
+  }
+
   const rawName = correction.rawEmployee.trim();
   const rawDepartment = (
     correction.rawDepartment ||
@@ -529,17 +538,24 @@ export async function recordScanCorrection(
   ).run();
 
   const inserted = Number(insertResult.meta.changes || 0) > 0;
-  await createOrUpdateScanAlias(
-    env,
-    business,
-    rawDepartment,
-    rawName,
-    normalizedRawName,
-    finalEmployee,
-    employeeKey,
-    finalDepartment,
-    inserted ? 1 : 0
-  );
-  return { inserted };
+  const aliasLearned = inserted && changesScanIdentity(correction);
+  if (aliasLearned) {
+    await createOrUpdateScanAlias(
+      env,
+      business,
+      rawDepartment,
+      rawName,
+      normalizedRawName,
+      finalEmployee,
+      employeeKey,
+      finalDepartment,
+      1
+    );
+  }
+  return {
+    inserted,
+    aliasLearned,
+    changedFields: getChangedCorrectionFields(correction.original, correction.final)
+  };
 }
 

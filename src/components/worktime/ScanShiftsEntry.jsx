@@ -41,6 +41,20 @@ function validateShiftRow(row) {
   return { valid: errors.length === 0, errors, duration };
 }
 
+function rowHasActualCorrection(row) {
+  if (!row?._original) return false;
+  return ['employee', 'department', 'date', 'startTime', 'endTime']
+    .some((field) => {
+      const normalized = (value) => {
+        const text = String(value || '').trim();
+        return field === 'employee' || field === 'department'
+          ? text.toLocaleLowerCase('de-DE').replace(/\s+/g, ' ')
+          : text;
+      };
+      return normalized(row[field]) !== normalized(row._original[field]);
+    });
+}
+
 export default function ScanShiftsEntry({ business, staffConfig, todayIso, onConfirmAll, onBack }) {
   const [status, setStatus] = useState('idle'); // idle | processing | preview | error | success
   const [errorMsg, setErrorMsg] = useState('');
@@ -312,7 +326,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
       next._needsReview = false;
       next._reviewReasons = [];
       next._confidence = Math.max(Number(next._confidence) || 0, 0.9);
-      next._correctionConfirmed = true;
+      next._correctionConfirmed = rowHasActualCorrection(next);
     } else if (!validation.valid) {
       next._needsReview = true;
       next._reviewReasons = validation.errors;
@@ -409,7 +423,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
           ...row,
           _needsReview: false,
           _reviewReasons: [],
-          _correctionConfirmed: row._correctionConfirmed || row._needsReview
+          _correctionConfirmed: rowHasActualCorrection(row)
         };
       })
     );
@@ -456,8 +470,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
       const learnedCorrections = selectedShifts
         .filter((row) => {
           if (!scanId || !row._rawEmployee || !row._original) return false;
-          return ['employee', 'department', 'date', 'startTime', 'endTime']
-            .some((field) => String(row[field] || '') !== String(row._original[field] || ''));
+          return rowHasActualCorrection(row);
         })
         .map((row) => ({
           rawEmployee: row._rawEmployee,

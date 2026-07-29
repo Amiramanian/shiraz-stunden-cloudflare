@@ -14,6 +14,12 @@ import {
   matchScannedStaff
 } from '../worker/staff-config.ts';
 import { normalizeScanAliasName } from '../worker/db.ts';
+import {
+  changesScanIdentity,
+  getChangedCorrectionFields,
+  isActualScanCorrection
+} from '../worker/scan-corrections.ts';
+import { compareBackupTables } from '../worker/backup.ts';
 
 function flattenBusiness(
   config: Record<string, Record<string, string[]>>,
@@ -185,6 +191,73 @@ test('photo and voice corrections share one normalized alias key', () => {
   assert.equal(normalizeScanAliasName(' Malik.T '), 'malikt');
   assert.equal(normalizeScanAliasName('Malik   T'), 'malikt');
   assert.equal(normalizeScanAliasName('Mir-hei_dar'), 'mirheidar');
+});
+
+test('AI learning is recorded only for an actual user correction', () => {
+  const unchanged = {
+    rawEmployee: 'Mirhadar',
+    original: {
+      employee: 'Mirheiydar',
+      department: 'Personal',
+      date: '2026-07-27',
+      startTime: '17:00',
+      endTime: '23:00'
+    },
+    final: {
+      employee: ' Mirheiydar ',
+      department: 'personal',
+      date: '2026-07-27',
+      startTime: '17:00',
+      endTime: '23:00'
+    }
+  };
+  assert.equal(isActualScanCorrection(unchanged), false);
+  assert.deepEqual(getChangedCorrectionFields(unchanged.original, unchanged.final), []);
+  assert.equal(changesScanIdentity(unchanged), false);
+
+  const timeCorrection = {
+    ...unchanged,
+    final: { ...unchanged.final, endTime: '22:30' }
+  };
+  assert.equal(isActualScanCorrection(timeCorrection), true);
+  assert.deepEqual(
+    getChangedCorrectionFields(timeCorrection.original, timeCorrection.final),
+    ['endTime']
+  );
+  assert.equal(changesScanIdentity(timeCorrection), false);
+
+  const nameCorrection = {
+    ...unchanged,
+    final: { ...unchanged.final, employee: 'Nabi' }
+  };
+  assert.equal(isActualScanCorrection(nameCorrection), true);
+  assert.equal(changesScanIdentity(nameCorrection), true);
+});
+
+test('nightly backup comparison detects added, updated, and removed rows', () => {
+  const changes = compareBackupTables(
+    {
+      shifts: [
+        { id: 'kept', employee: 'Amir2', start_time: '12:30' },
+        { id: 'added', employee: 'Nima', start_time: '17:00' }
+      ]
+    },
+    {
+      shifts: [
+        { id: 'kept', employee: 'Amir2', start_time: '12:00' },
+        { id: 'removed', employee: 'Malik', start_time: '18:00' }
+      ]
+    }
+  );
+
+  assert.deepEqual(changes.shifts, {
+    added: 1,
+    updated: 1,
+    removed: 1,
+    addedIds: ['added'],
+    updatedIds: ['kept'],
+    removedIds: ['removed']
+  });
 });
 
 test('Tech or Technik beside a name overrides the printed section', () => {

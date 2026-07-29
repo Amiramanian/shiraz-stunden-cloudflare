@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Outlet, useNavigate, useLocation, useNavigationType } from 'react-router-dom';
+import { Outlet, useNavigate, useLocation, useNavigationType } from 'react-router';
 import { AnimatePresence, motion } from 'framer-motion';
 import { base44 } from '@/api/base44Client';
 import {

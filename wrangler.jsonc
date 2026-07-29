@@ -29,6 +29,12 @@
       }
     }
   ],
+  "kv_namespaces": [
+    {
+      "binding": "BACKUPS",
+      "id": "aa9e730ba14f4d6783b381ce0c28d492"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

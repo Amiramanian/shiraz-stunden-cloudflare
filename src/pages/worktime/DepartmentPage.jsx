@@ -1,5 +1,5 @@
 import React from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext } from 'react-router';
 import DepartmentStep from '@/components/worktime/DepartmentStep';
 import { getDepartmentList } from '@/lib/staffConfig';
 

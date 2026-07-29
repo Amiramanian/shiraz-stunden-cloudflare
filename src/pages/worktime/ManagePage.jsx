@@ -1,5 +1,5 @@
 import React from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext } from 'react-router';
 import ManagementView from '@/components/worktime/ManagementView';
 
 export default function ManagePage() {

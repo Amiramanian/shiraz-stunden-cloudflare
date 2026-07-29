@@ -29,6 +29,7 @@ import { exportReport } from './report';
 import { processScanRequest } from './scan-shifts';
 import { normalizePersonName } from './staff-config';
 import { processVoiceShift } from './voice-shifts';
+import { getBackupStatus, runNightlyBackup } from './backup';
 import {
   clearExpiredAuthSessions,
   clearSessionCookie,
@@ -318,6 +319,15 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       return json({ email, role: 'admin' });
     }
 
+    if (url.pathname === '/api/backups/status' && method === 'GET') {
+      return json({ latest: await getBackupStatus(env) });
+    }
+
+    if (url.pathname === '/api/backups/run' && method === 'POST') {
+      const backup = await runNightlyBackup(env, 'manual');
+      return json(backup, 201);
+    }
+
     if (url.pathname === '/api/staff-members' && method === 'GET') {
       return json(await listStaff(env));
     }
@@ -437,6 +447,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
 
       const result = await bulkCreateShifts(env, shifts);
       let learnedCorrections = 0;
+      let learnedAliases = 0;
       for (const correction of corrections) {
         const learned = await recordScanCorrection(
           env,
@@ -445,6 +456,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
           correction
         );
         if (learned.inserted) learnedCorrections += 1;
+        if (learned.aliasLearned) learnedAliases += 1;
       }
 
       if (scanId) {
@@ -463,7 +475,8 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
         created: result.created,
         skipped: result.skipped,
         scanId: scanId || null,
-        learnedCorrections
+        learnedCorrections,
+        learnedAliases
       }, email);
 
       try {
@@ -471,6 +484,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
         return json({
           ...result,
           learnedCorrections,
+          learnedAliases,
           excelSynced: true,
           spreadsheetId: env.GOOGLE_SPREADSHEET_ID || null,
           webViewLink: env.GOOGLE_SHEET_URL || null
@@ -485,6 +499,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
         return json({
           ...result,
           learnedCorrections,
+          learnedAliases,
           excelSynced: false,
           syncError
         }, 201);
@@ -641,9 +656,33 @@ export default {
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(Promise.all([
-      exportReport(env, 'scheduled'),
-      clearExpiredAuthSessions(env)
-    ]).then(() => undefined));
+    ctx.waitUntil((async () => {
+      const tasks = [
+        ['backup', runNightlyBackup(env, 'scheduled')],
+        ['report_export', exportReport(env, 'scheduled')],
+        ['auth_cleanup', clearExpiredAuthSessions(env)]
+      ] as const;
+      const results = await Promise.allSettled(tasks.map(([, task]) => task));
+      const failures: string[] = [];
+
+      results.forEach((result, index) => {
+        const taskName = tasks[index][0];
+        if (result.status === 'rejected') {
+          const message = result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason);
+          failures.push(`${taskName}: ${message}`);
+          console.error(JSON.stringify({
+            event: 'scheduled_task_failed',
+            task: taskName,
+            message
+          }));
+        }
+      });
+
+      if (failures.length) {
+        throw new Error(`Scheduled tasks failed: ${failures.join('; ')}`);
+      }
+    })());
   }
 } satisfies ExportedHandler<Env>;
