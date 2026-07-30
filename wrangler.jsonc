@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "shiraz-stunden",
+  "name": "shiraz-stunden-cloudflare",
   "main": "worker/index.ts",
   "compatibility_date": "2026-07-21",
   "compatibility_flags": ["nodejs_compat"],
