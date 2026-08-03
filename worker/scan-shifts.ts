@@ -28,7 +28,7 @@ import {
 export type { ScannedShiftRaw } from './scan-providers';
 
 export interface ScanRequest {
-  business: 'Shiraz' | 'Djadoo' | 'Catering';
+  business: 'Shiraz' | 'Djadoo';
   todayIso: string;
   staffConfig?: Record<string, Record<string, string[]>>;
   images: string[];
@@ -55,7 +55,14 @@ export interface ScanResponse {
   skippedCount: number;
   provider: ScanProviderName | 'manual';
   warnings: string[];
+  providerFailures: ProviderFailure[];
   manualFallback?: boolean;
+}
+
+export interface ProviderFailure {
+  provider: ScanProviderName;
+  displayName: string;
+  message: string;
 }
 
 interface NormalizedProviderResult {
@@ -71,7 +78,13 @@ interface ProviderCandidate extends NormalizedProviderResult {
 
 const MAX_IMAGE_COUNT = 10;
 function providerDisplayName(provider: ScanProviderName): string {
-  return provider === 'gemini' ? 'Google Gemini' : provider;
+  const names: Record<ScanProviderName, string> = {
+    'cloudflare-mistral': 'Cloudflare Mistral Vision',
+    'cloudflare-moondream': 'Cloudflare Moondream OCR',
+    'cloudflare-gemma': 'Cloudflare Gemma Vision',
+    gemini: 'Google Gemini'
+  };
+  return names[provider];
 }
 
 function uniqueWarnings(warnings: string[]): string[] {
@@ -162,7 +175,7 @@ function validateRequest(request: ScanRequest): void {
     }
   }
 
-  if (!['Shiraz', 'Djadoo', 'Catering'].includes(request.business)) {
+  if (!['Shiraz', 'Djadoo'].includes(request.business)) {
     throw new Error('Invalid business value');
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(request.todayIso)) {
@@ -361,7 +374,7 @@ export async function processScanRequest(
 
     const providers = getAvailableScanProviders(env);
     const providerWarnings: string[] = [...imageExtraction.warnings];
-    const providerFailures: Array<{ provider: string; message: string }> = [];
+    const providerFailures: ProviderFailure[] = [];
     let candidate: ProviderCandidate | null = null;
 
     for (const provider of providers) {
@@ -383,6 +396,19 @@ export async function processScanRequest(
           provider,
           rawOutput
         };
+        if (normalized.shifts.length === 0) {
+          const message = 'Keine ausreichend belegte Schicht erkannt.';
+          providerFailures.push({
+            provider,
+            displayName: providerDisplayName(provider),
+            message
+          });
+          providerWarnings.push(
+            `${providerDisplayName(provider)} erkannte keine sichere Schicht; der nächste Dienst wurde versucht.`
+          );
+          candidate = null;
+          continue;
+        }
         break;
       } catch (error) {
         const failureMessage = error instanceof Error
@@ -396,7 +422,11 @@ export async function processScanRequest(
           provider,
           message: failureMessage.slice(0, 180)
         }));
-        providerFailures.push({ provider, message: failureMessage });
+        providerFailures.push({
+          provider,
+          displayName: providerDisplayName(provider),
+          message: failureMessage
+        });
         providerWarnings.push(
           `${providerDisplayName(provider)} war nicht verfügbar; der nächste Dienst wurde versucht.`
         );
@@ -422,6 +452,7 @@ export async function processScanRequest(
         skippedCount: 0,
         provider: 'manual',
         warnings,
+        providerFailures,
         manualFallback: true
       };
     }
@@ -500,6 +531,7 @@ export async function processScanRequest(
       mergedResultJson: JSON.stringify(enrichedShifts),
       finalResultJson: JSON.stringify({
         provider: candidate.provider,
+        providerFailures,
         warnings,
         shifts: enrichedShifts
       }),
@@ -515,6 +547,7 @@ export async function processScanRequest(
       skippedCount: candidate.skippedCount,
       provider: candidate.provider,
       warnings,
+      providerFailures,
       manualFallback: enrichedShifts.length === 0
     };
   } catch (error) {

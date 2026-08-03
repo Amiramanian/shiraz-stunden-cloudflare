@@ -28,7 +28,6 @@ import {
 import { exportReport } from './report';
 import { processScanRequest } from './scan-shifts';
 import { normalizePersonName } from './staff-config';
-import { processVoiceShift } from './voice-shifts';
 import { getBackupStatus, runNightlyBackup } from './backup';
 import {
   clearExpiredAuthSessions,
@@ -42,7 +41,6 @@ import {
 
 const DEFAULT_JSON_LIMIT = 1_000_000;
 const SCAN_JSON_LIMIT = 25_000_000;
-const VOICE_JSON_LIMIT = 9_000_000;
 
 function json(data: unknown, status = 200, extraHeaders?: HeadersInit) {
   const headers = new Headers(extraHeaders);
@@ -112,7 +110,7 @@ async function authorizeRequest(request: Request, env: Env) {
 }
 
 function validateBusiness(value: unknown): ShiftRecord['business'] {
-  if (value === 'Shiraz' || value === 'Djadoo' || value === 'Catering') return value;
+  if (value === 'Shiraz' || value === 'Djadoo') return value;
   throw new Error('Ungültiger Betrieb.');
 }
 
@@ -572,14 +570,18 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
 
     if (url.pathname === '/api/scan-shifts/status' && method === 'GET') {
       return json({
-        primaryProvider: 'gemini',
+        primaryProvider: 'cloudflare-mistral',
         providers: {
-          gemini: Boolean(env.GEMINI_API_KEY),
-          groq: Boolean(env.GROQ_API_KEY)
+          cloudflareMistral: Boolean(env.AI),
+          cloudflareMoondream: Boolean(env.AI),
+          cloudflareGemma: Boolean(env.AI),
+          gemini: Boolean(env.GEMINI_API_KEY)
         },
         models: {
-          gemini: env.GEMINI_MODEL,
-          groqSpeech: env.GROQ_SPEECH_MODEL
+          cloudflareMistral: '@cf/mistralai/mistral-small-3.1-24b-instruct',
+          cloudflareMoondream: '@cf/moondream/moondream3.1-9B-A2B',
+          cloudflareGemma: '@cf/google/gemma-4-26b-a4b-it',
+          gemini: env.GEMINI_MODEL
         }
       });
     }
@@ -594,7 +596,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
         ocrTexts?: string[];
       }>(request, SCAN_JSON_LIMIT);
       
-      const business = requireString(body.business, 'business') as 'Shiraz' | 'Djadoo' | 'Catering';
+      const business = requireString(body.business, 'business') as 'Shiraz' | 'Djadoo';
       const todayIso = requireString(body.todayIso, 'todayIso');
       const staffConfig = body.staffConfig || {};
       const images = Array.isArray(body.images) ? body.images : [];
@@ -625,17 +627,6 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
         manualFallback: Boolean(result.manualFallback)
       }, email);
 
-      return json(result, 201);
-    }
-
-    if (url.pathname === '/api/voice/shift' && method === 'POST') {
-      const body = await readJson<{ audio?: unknown }>(request, VOICE_JSON_LIMIT);
-      const result = await processVoiceShift(env, body, email);
-      await logAudit(env, 'voice_shift', 'scan_history', result.scanId, {
-        audioBytes: result.audioBytes,
-        confidence: result.suggestion.confidence,
-        needsReview: result.suggestion.needsReview
-      }, email);
       return json(result, 201);
     }
 

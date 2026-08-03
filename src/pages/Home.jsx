@@ -80,12 +80,6 @@ export default function Home() {
     setSelectedDepartment('');
     setSelectedEmployee('');
 
-    if (business === 'Catering') {
-      setSelectedDepartment('Catering');
-      navigate('/employee');
-      return;
-    }
-
     navigate('/department');
   }
 
@@ -167,90 +161,6 @@ export default function Home() {
       business: selectedBusiness,
       department: selectedDepartment,
       employee: selectedEmployee,
-      employeeKey,
-      date,
-      startTime,
-      endTime,
-      durationHours
-    });
-  }
-
-  async function handleVoiceAddShift({
-    business,
-    department,
-    employee,
-    date,
-    startTime,
-    endTime,
-    durationHours
-  }, voiceMeta) {
-    const employeeKey = normalizePersonName(employee);
-
-    if (voiceMeta?.scanId) {
-      const original = voiceMeta.original || {};
-      const final = { employee, department, date, startTime, endTime };
-      const changed = ['employee', 'department', 'date', 'startTime', 'endTime']
-        .some((field) => String(final[field] || '') !== String(original[field] || ''));
-      const corrections = changed && voiceMeta.rawEmployee
-        ? [{
-            rawEmployee: voiceMeta.rawEmployee,
-            suggestedEmployee: original.employee,
-            rawDepartment: voiceMeta.rawDepartment || original.department,
-            original,
-            final
-          }]
-        : [];
-
-      const response = await fetch('/api/shifts/bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scanId: voiceMeta.scanId,
-          corrections,
-          shifts: [{
-            business,
-            department,
-            employee,
-            employeeKey,
-            date,
-            startTime,
-            endTime,
-            durationHours
-          }]
-        })
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(result.error || 'Sprachschicht konnte nicht gespeichert werden.');
-      }
-      if (!result.excelSynced) {
-        throw new Error(
-          'Schicht gespeichert, aber Excel-Synchronisierung fehlgeschlagen: ' +
-          (result.syncError || 'unbekannter Fehler')
-        );
-      }
-      return result;
-    }
-
-    const existing = await base44.entities.Shift.filter({
-      business,
-      department,
-      employeeKey,
-      date,
-      startTime,
-      endTime
-    });
-
-    if (existing?.length > 0) {
-      throw new Error(
-        'Diese Schicht wurde für diesen Mitarbeiter an diesem Tag bereits erfasst.'
-      );
-    }
-
-    return base44.entities.Shift.create({
-      business,
-      department,
-      employee,
       employeeKey,
       date,
       startTime,
@@ -342,7 +252,6 @@ export default function Home() {
     handleAddEmployee,
     handleHideEmployee,
     handleSaveShift,
-    handleVoiceAddShift,
     handleScanAddShifts,
     openScanShifts,
     openHinweiseEmployeePage,

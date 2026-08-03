@@ -2,7 +2,7 @@
 // Mirrors the original Google Apps Script config
 
 export const SHIRAZ_BASE_STAFF = {
-  Bar: ['Amir2', 'Behrouz', 'Mostafa'],
+  Bar: ['Amir2', 'Behrouz', 'Mostafa', 'Pascha'],
   Küche: [
     'Hossein', 'Nima', 'Kashef', 'Ahmed', 'Shakur', 'Aref', 'Mohsen',
     'Filimon', 'Porya', 'Sadegh', 'M.Asef', 'Ghader', 'Zakaria',
@@ -10,13 +10,12 @@ export const SHIRAZ_BASE_STAFF = {
   ],
   Service: [
     'Reyhan', 'Alireza', 'Masoud', 'Narin', 'Shima', 'Yeganeh',
-    'Nian', 'Niloufar', 'Dilman', 'Araz'
+    'Nian', 'Niloufar', 'Dilman', 'Araz', 'Kianoush'
   ],
   Fahrer: [
     'Yusef', 'Erfan', 'Malik Lugman', 'Malik Tanwir', 'Vahid',
-    'Kazem', 'Amir2', 'Masoud'
-  ],
-  Betriebsleiter: ['Amir', 'Kianoush', 'Pascha']
+    'Kazem', 'Amir2', 'Masoud', 'Amir'
+  ]
 };
 
 export const DJADOO_PERSONAL_STAFF = [
@@ -25,9 +24,8 @@ export const DJADOO_PERSONAL_STAFF = [
   'Mr. Mohammadi', 'Dilman', 'Nian', 'Kianoush', 'Aref', 'Nami', 'Mohsen'
 ];
 
-export const SHIRAZ_DEPARTMENT_ORDER = ['Bar', 'Küche', 'Service', 'Fahrer', 'Betriebsleiter', 'Technik'];
+export const SHIRAZ_DEPARTMENT_ORDER = ['Bar', 'Küche', 'Service', 'Fahrer', 'Catering', 'Technik'];
 export const DJADOO_DEPARTMENT_ORDER = ['Personal', 'Technik'];
-export const CATERING_DEPARTMENT_ORDER = ['Catering'];
 
 // People who only get Hinweise (notes) — not part of any business/department, no shifts.
 export const HINWEIS_ONLY_STAFF = ['Fr Bobrik'];
@@ -67,8 +65,7 @@ function uniqueNames(names) {
 export function buildEffectiveStaffConfig(additionalStaff = [], includeHidden = false) {
   const config = {
     Shiraz: {},
-    Djadoo: {},
-    Catering: {}
+    Djadoo: {}
   };
 
   Object.keys(SHIRAZ_BASE_STAFF).forEach((dept) => {
@@ -92,13 +89,16 @@ export function buildEffectiveStaffConfig(additionalStaff = [], includeHidden = 
   }
 
   additionalStaff.forEach((item) => {
-    if (!config[item.business]) return;
     if (!includeHidden && item.hidden) return; // skip hidden staff in the app
 
-    if (item.business === 'Catering') {
+    if (
+      item.business === 'Catering' ||
+      (item.business === 'Shiraz' && item.department === 'Catering')
+    ) {
       cateringOnly.push(item.employee);
       return;
     }
+    if (!config[item.business]) return;
     if (item.business === 'Shiraz' && item.department === 'Technik') {
       shirazTechnikOnly.push(item.employee);
       return;
@@ -132,8 +132,8 @@ export function buildEffectiveStaffConfig(additionalStaff = [], includeHidden = 
     ...djadooTechnikOnly
   ]);
 
-  // Catering = all members from every department (Shiraz + Djadoo Personal) + anyone added directly to Catering
-  config.Catering.Catering = uniqueNames([
+  // Catering is a Shiraz department containing all operational staff.
+  config.Shiraz.Catering = uniqueNames([
     ...shirazAllExceptTechnik,
     ...config.Djadoo.Personal,
     ...cateringOnly
@@ -149,11 +149,6 @@ export function buildEffectiveStaffConfig(additionalStaff = [], includeHidden = 
   DJADOO_DEPARTMENT_ORDER.forEach((d) => { if (config.Djadoo[d]) orderedDjadoo[d] = config.Djadoo[d]; });
   Object.keys(config.Djadoo).forEach((d) => { if (!orderedDjadoo[d]) orderedDjadoo[d] = config.Djadoo[d]; });
   config.Djadoo = orderedDjadoo;
-
-  const orderedCatering = {};
-  CATERING_DEPARTMENT_ORDER.forEach((d) => { if (config.Catering[d]) orderedCatering[d] = config.Catering[d]; });
-  Object.keys(config.Catering).forEach((d) => { if (!orderedCatering[d]) orderedCatering[d] = config.Catering[d]; });
-  config.Catering = orderedCatering;
 
   // Filter out globally-hidden employees from every department (app only)
   if (!includeHidden && hiddenEmployeeKeys.size > 0) {

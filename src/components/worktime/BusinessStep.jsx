@@ -1,14 +1,10 @@
 import React from 'react';
 import { ClipboardList, StickyNote, ScanLine } from 'lucide-react';
-import VoiceShiftEntry from '@/components/worktime/VoiceShiftEntry';
 
-export default function BusinessStep({ onSelectBusiness, onOpenHinweise, onOpenScanShifts, staffConfig, todayIso, onVoiceConfirm }) {
+export default function BusinessStep({ onSelectBusiness, onOpenHinweise, onOpenScanShifts }) {
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold text-center text-neutral-800">Auswahl</h2>
-      {staffConfig && (
-        <VoiceShiftEntry staffConfig={staffConfig} todayIso={todayIso} onConfirm={onVoiceConfirm} />
-      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <button
           onClick={() => onSelectBusiness('Shiraz')}
@@ -23,13 +19,6 @@ export default function BusinessStep({ onSelectBusiness, onOpenHinweise, onOpenS
         >
           <ClipboardList size={32} />
           Djadoo
-        </button>
-        <button
-          onClick={() => onSelectBusiness('Catering')}
-          className="flex flex-col items-center gap-2 py-8 rounded-2xl bg-neutral-900 text-white font-bold text-xl shadow-lg hover:bg-neutral-700 active:scale-[0.98] transition sm:col-span-2"
-        >
-          <ClipboardList size={32} />
-          Catering
         </button>
       </div>
       <button

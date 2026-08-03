@@ -32,7 +32,7 @@ import {
 } from '@/components/ui/dialog';
 
 const PAGE_SIZE = 20;
-const BUSINESSES = ['Shiraz', 'Djadoo', 'Catering'];
+const BUSINESSES = ['Shiraz', 'Djadoo'];
 const fieldClass = 'w-full rounded-xl border border-neutral-300 bg-white px-3 py-2.5 text-neutral-900 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100';
 
 function formatDate(value) {

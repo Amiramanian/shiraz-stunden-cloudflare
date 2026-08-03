@@ -16,7 +16,7 @@ class GeminiHttpError extends Error {
 
 function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 425 ||
-    status === 429 || status >= 500;
+    status >= 500;
 }
 
 async function readBodyLimited(response: Response, maxBytes: number): Promise<string> {

@@ -4,7 +4,7 @@ import BusinessStep from '@/components/worktime/BusinessStep';
 
 export default function BusinessPage() {
   const navigate = useNavigate();
-  const { selectBusiness, openHinweiseEmployeePage, staffConfig, todayIso, handleVoiceAddShift, openScanShifts } = useOutletContext();
+  const { selectBusiness, openHinweiseEmployeePage, openScanShifts } = useOutletContext();
 
   return (
     <BusinessStep
@@ -12,9 +12,6 @@ export default function BusinessPage() {
       onOpenHinweise={openHinweiseEmployeePage}
       onOpenReports={() => navigate('/reports')}
       onOpenScanShifts={openScanShifts}
-      staffConfig={staffConfig}
-      todayIso={todayIso}
-      onVoiceConfirm={handleVoiceAddShift}
     />
   );
 }

@@ -30,7 +30,7 @@ export default function EmployeePage() {
       onSelectEmployee={selectEmployee}
       onAddEmployee={handleAddEmployee}
       onHideEmployee={handleHideEmployee}
-      onBack={() => navigate(selectedBusiness === 'Catering' ? '/' : '/department')}
+      onBack={() => navigate('/department')}
     />
   );
 }

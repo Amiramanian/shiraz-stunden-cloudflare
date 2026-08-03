@@ -59,6 +59,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
   const [status, setStatus] = useState('idle'); // idle | processing | preview | error | success
   const [errorMsg, setErrorMsg] = useState('');
   const [warningMsg, setWarningMsg] = useState('');
+  const [providerFailures, setProviderFailures] = useState([]);
   const [rows, setRows] = useState([]);
   const [selectedRows, setSelectedRows] = useState(new Set());
   const [scanId, setScanId] = useState('');
@@ -136,6 +137,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
 
   function presentScanResult(result) {
     setScanId(result?.scanId || '');
+    setProviderFailures(Array.isArray(result?.providerFailures) ? result.providerFailures : []);
     const warningText = Array.isArray(result?.warnings)
       ? result.warnings.join(' ')
       : '';
@@ -271,6 +273,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
     setStatus('processing');
     setErrorMsg('');
     setWarningMsg('');
+    setProviderFailures([]);
     setProcessingDetails('');
     setRows([]);
     setSelectedRows(new Set());
@@ -541,6 +544,9 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
     if (source === 'manual') return 'Manuell';
     if (source === 'ocr') return 'OCR';
     if (source === 'gemini') return 'Gemini';
+    if (source === 'cloudflare-mistral') return 'Cloudflare Mistral';
+    if (source === 'cloudflare-moondream') return 'Cloudflare Moondream';
+    if (source === 'cloudflare-gemma') return 'Cloudflare Gemma';
     return 'KI';
   }
 
@@ -668,6 +674,20 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
         </div>
       )}
 
+      {providerFailures.length > 0 && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-red-800">
+          <p className="mb-2 font-semibold">Details der fehlgeschlagenen KI-Dienste:</p>
+          <ul className="space-y-1 text-sm">
+            {providerFailures.map((failure, index) => (
+              <li key={`${failure.provider || 'provider'}-${index}`} className="break-words">
+                <strong>{failure.displayName || failure.provider || 'KI'}:</strong>{' '}
+                {failure.message || 'Unbekannter Fehler'}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Controls */}
       <div className="flex flex-wrap gap-2 mb-6 pb-6 border-b">
         <button
@@ -702,6 +722,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
             setRows([]);
             setSelectedRows(new Set());
             setWarningMsg('');
+            setProviderFailures([]);
             setScanId('');
             lastScanRef.current = null;
           }}

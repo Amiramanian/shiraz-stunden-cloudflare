@@ -23,10 +23,10 @@ Independent migration of the previous Base44 work-time app to Cloudflare.
 - Google Sheets tab creation, data writing and formatting
 - Existing frontend flow migrated away from the Base44 SDK
 
-Photo schedule scanning uses Google Gemini multimodal vision with optional local
-OCR hints. Voice entry uses Groq Whisper for transcription and Gemini for
-structured extraction, with automatic Gemini audio fallback. Both flows share
-the same correction learning and Google Sheets synchronization.
+Photo schedule scanning uses local OCR hints plus a four-provider fallback
+chain: Cloudflare Mistral Vision, Cloudflare Moondream OCR, Cloudflare Gemma
+Vision, and Google Gemini. Confirmed corrections are learned and Google Sheets
+is synchronized immediately.
 
 ## Google Sheet
 
@@ -42,11 +42,10 @@ The spreadsheet already contains these tabs:
 - Küche
 - Service
 - Fahrer
-- Betriebsleiter
 - Technik
 - Personal Djadoo
 - Technik Djadoo
-- Catering
+- Catering (under Shiraz)
 - Fr Bobrik
 - hidden raw-data tabs
 
@@ -131,30 +130,19 @@ A new AI-powered photo scan feature allows users to upload shift schedule photos
    - Google Sheets is updated before the save response returns, so no manual refresh/export is required
    - Full-sheet rebuilds are serialized with a D1 lease so concurrent saves cannot clear each other
 
-### Voice entry
-
-- The browser records with `MediaRecorder` and sends a bounded audio data URL to the Worker.
-- Groq `whisper-large-v3-turbo` transcribes German, Persian, English, or mixed speech.
-- Gemini extracts one date and 24-hour time range against the server-side staff directory.
-- If Groq is unavailable, Gemini processes the audio directly.
-- Known and learned aliases are applied without merging numeric names such as `Amir2` with `Amir`.
-- The editable preview shows the transcript, review reasons, and calculated hours.
-- Confirming a corrected voice entry stores the correction and synchronizes Google Sheets immediately.
-
 ### Local Setup for Scanner
 
 1. Copy `.dev.vars.example` to `.dev.vars`.
 
-Create free API keys for Gemini and Groq, then store them only in `.dev.vars`
-locally and as encrypted Worker secrets in production:
+Create a free Gemini API key, then store it only in `.dev.vars` locally and as
+an encrypted Worker secret in production. The three Cloudflare providers use
+the configured Workers AI binding and need no additional key:
 
 ```bash
 GEMINI_API_KEY=your-gemini-api-key
-GROQ_API_KEY=your-groq-api-key
 ```
 
-Get keys from [Google AI Studio](https://aistudio.google.com/app/apikey) and
-[Groq Console](https://console.groq.com/keys).
+Get the key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 
 2. Apply new D1 migration:
 
@@ -211,7 +199,7 @@ Response:
       "startTime": "09:00",
       "endTime": "17:00",
       "confidence": 0.95,
-      "source": "gemini",
+      "source": "cloudflare-mistral",
       "normalizedStart": "09:00",
       "normalizedEnd": "17:00",
       "matchedBusiness": "Shiraz",
@@ -244,12 +232,14 @@ Response:
 
 ### Provider behavior
 
-- Gemini is the photo scanner and structured extraction provider.
-- Groq Whisper is the preferred voice transcription provider.
-- Gemini processes voice directly when Groq is temporarily unavailable.
-- A manual preview row is shown when no evidenced photo row is found.
-- Retryable provider failures are retried once. Malformed or uncertain rows are
-  not silently accepted and remain editable in the preview.
+- Cloudflare Mistral Vision is tried first.
+- Cloudflare Gemma Vision and Cloudflare Moondream OCR are independent fallbacks.
+- Gemini is the final fallback and is not retried after a quota-limit response.
+- Each provider failure is returned separately and shown in the preview.
+- A provider that returns no evidenced shift is treated as unsuccessful so the
+  next provider is tried.
+- A manual preview row is shown when no provider finds an evidenced row.
+- Malformed or uncertain rows are not silently accepted and remain editable.
 
 ### Learning Aliases
 
@@ -266,20 +256,16 @@ Once a user corrects an employee name during preview, the mapping is learned:
 - `GOOGLE_PRIVATE_KEY` = full private key with newlines
 - `GOOGLE_SPREADSHEET_ID` = spreadsheet ID (optional if in wrangler.jsonc)
 - `GEMINI_API_KEY` = Gemini API key
-- `GROQ_API_KEY` = Groq API key
 
 **Cloudflare Secrets** (Encrypt & store in Cloudflare):
 - `APP_PIN` – four-digit application login PIN
 - `GOOGLE_CLIENT_EMAIL` – Google service account email
 - `GOOGLE_PRIVATE_KEY` – Google service account private key (full PEM format)
 - `GEMINI_API_KEY` – Gemini authentication token
-- `GROQ_API_KEY` – Groq authentication token
 
 **Cloudflare Variables** (Non-secret, in wrangler.jsonc):
 - `GEMINI_BASE_URL` = `https://generativelanguage.googleapis.com/v1beta`
 - `GEMINI_MODEL` = `gemini-flash-latest`
-- `GROQ_BASE_URL` = `https://api.groq.com/openai/v1`
-- `GROQ_SPEECH_MODEL` = `whisper-large-v3-turbo`
 - `GOOGLE_SPREADSHEET_ID` = Spreadsheet ID
 - `GOOGLE_SHEET_URL` = Spreadsheet URL
 - `APP_TIMEZONE` = `Europe/Berlin` (optional)
@@ -288,11 +274,11 @@ Once a user corrects an employee name during preview, the mapping is learned:
 
 **Provider status:**
 - Open `/api/scan-shifts/status`
-- `gemini` and `groq` should both be `true`
+- The three Cloudflare providers and Gemini are reported independently.
 
 **All providers unavailable:**
 - The app opens a manual preview row instead of losing the scan
-- Check the Gemini and Groq secret status
+- Check the Workers AI binding and Gemini secret status
 
 **OCR is slow:**
 - First run downloads Tesseract model (~60MB)

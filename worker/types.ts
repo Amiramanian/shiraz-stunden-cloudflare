@@ -3,17 +3,17 @@ export interface Env extends Cloudflare.Env {
   APP_PIN: string;
   LOGIN_RATE_LIMITER: RateLimit;
   BACKUPS: KVNamespace;
+  AI: Ai;
 
   GOOGLE_CLIENT_EMAIL: string;
   GOOGLE_PRIVATE_KEY: string;
 
   GEMINI_API_KEY: string;
-  GROQ_API_KEY: string;
 }
 
 export interface ShiftRecord {
   id: string;
-  business: 'Shiraz' | 'Djadoo' | 'Catering';
+  business: 'Shiraz' | 'Djadoo';
   department: string;
   employee: string;
   employeeKey: string;
@@ -33,7 +33,7 @@ export interface HinweisRecord {
 
 export interface StaffMemberRecord {
   id: string;
-  business: 'Shiraz' | 'Djadoo' | 'Catering';
+  business: 'Shiraz' | 'Djadoo';
   department: string;
   employee: string;
   employeeKey: string;
@@ -41,18 +41,25 @@ export interface StaffMemberRecord {
 }
 
 export interface ScannedShift {
-  business: 'Shiraz' | 'Djadoo' | 'Catering';
+  business: 'Shiraz' | 'Djadoo';
   department: string;
   employee: string;
   date: string;
   startTime: string;
   endTime: string;
   confidence?: number;
-  source?: 'gemini' | 'ocr' | 'merged' | 'manual';
+  source?:
+    | 'cloudflare-mistral'
+    | 'cloudflare-moondream'
+    | 'cloudflare-gemma'
+    | 'gemini'
+    | 'ocr'
+    | 'merged'
+    | 'manual';
 }
 
 export interface ScanShiftsRequest {
-  business: 'Shiraz' | 'Djadoo' | 'Catering';
+  business: 'Shiraz' | 'Djadoo';
   todayIso: string;
   directory: string;
   images: string[];

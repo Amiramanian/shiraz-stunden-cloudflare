@@ -51,7 +51,7 @@ export function buildSheetPlans(
 
   const plans: SheetPlan[] = [];
 
-  for (const business of ['Shiraz', 'Djadoo', 'Catering']) {
+  for (const business of ['Shiraz', 'Djadoo']) {
     for (const department of Object.keys(config[business] || {})) {
       const employees = config[business][department] || [];
       const blocks = employees.map((employee) => {

@@ -25,7 +25,7 @@
 ## Phase 2
 
 - Photo schedule scanning
-- Voice shift entry
+- Four-provider image scan fallback
 - Editing/deleting records from the app
 - Optional reverse sync from Google Sheet to D1
 - Automated backup snapshots

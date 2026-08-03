@@ -4,17 +4,11 @@ GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\
 GOOGLE_SPREADSHEET_ID=your_google_sheet_id
 GOOGLE_SHEET_URL=https://docs.google.com/spreadsheets/d/your_google_sheet_id/edit
 
-# Gemini handles both photo scans and voice entry.
+# Gemini is the last photo-scan fallback after the Workers AI binding.
 # Create a key at https://aistudio.google.com/app/apikey
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_MODEL=gemini-flash-latest
-
-# Groq transcribes voice; Gemini remains the automatic fallback.
-# Create a key at https://console.groq.com/keys
-GROQ_API_KEY=your-groq-api-key
-GROQ_BASE_URL=https://api.groq.com/openai/v1
-GROQ_SPEECH_MODEL=whisper-large-v3-turbo
 
 # Optional
 APP_TIMEZONE=Europe/Berlin

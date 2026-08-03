@@ -96,6 +96,12 @@ test('server staff config combines the built-in roster with visible D1 staff', (
 
   assert.ok(config.Djadoo.Personal.includes('Mirheiydar'));
   assert.ok(config.Djadoo.Personal.includes('Server Only Employee'));
+  assert.ok(config.Shiraz.Catering.includes('Pascha'));
+  assert.ok(config.Shiraz.Service.includes('Kianoush'));
+  assert.ok(config.Shiraz.Fahrer.includes('Amir'));
+  assert.ok(config.Shiraz.Bar.includes('Pascha'));
+  assert.equal(config.Shiraz.Betriebsleiter, undefined);
+  assert.equal(config.Catering, undefined);
 });
 
 test('canonical scan aliases resolve known handwriting variants', () => {
@@ -165,18 +171,18 @@ test('learned aliases cannot merge numbered and unnumbered employees', () => {
 
   const unnumbered = matchScannedStaff(
     'Amir',
-    'Betriebsleiter',
+    'Fahrer',
     staff,
     { employee: 'Amir2', department: 'Bar' }
   );
   assert.equal(unnumbered.employee, 'Amir');
-  assert.equal(unnumbered.department, 'Betriebsleiter');
+  assert.equal(unnumbered.department, 'Fahrer');
 
   const numbered = matchScannedStaff(
     'Amir2',
     'Bar',
     staff,
-    { employee: 'Amir', department: 'Betriebsleiter' }
+    { employee: 'Amir', department: 'Fahrer' }
   );
   assert.equal(numbered.employee, 'Amir2');
   assert.equal(numbered.department, 'Bar');
@@ -187,7 +193,7 @@ test('learned aliases cannot merge numbered and unnumbered employees', () => {
   assert.equal(hasCompatibleNameNumber('Mirhadar', 'Mirheiydar'), true);
 });
 
-test('photo and voice corrections share one normalized alias key', () => {
+test('scan corrections share one normalized alias key', () => {
   assert.equal(normalizeScanAliasName(' Malik.T '), 'malikt');
   assert.equal(normalizeScanAliasName('Malik   T'), 'malikt');
   assert.equal(normalizeScanAliasName('Mir-hei_dar'), 'mirheidar');

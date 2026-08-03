@@ -321,12 +321,12 @@ export async function createScanHistory(
     INSERT INTO scan_history (
       id, business, actor_email, provider, model, image_count, status
     )
-    VALUES (?, ?, ?, 'gemini', ?, ?, 'processing')
+    VALUES (?, ?, ?, 'fallback-chain', ?, ?, 'processing')
   `).bind(
     scanId,
     business,
     actorEmail,
-    env.GEMINI_MODEL,
+    `Cloudflare Vision chain + ${env.GEMINI_MODEL || 'gemini-flash-latest'}`,
     imageCount
   ).run();
 }
