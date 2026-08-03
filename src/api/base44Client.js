@@ -74,6 +74,7 @@ export const base44 = {
     async invoke(name, body = {}) {
       const routes = {
         exportToGoogleDrive: ['/api/report/export', 'POST'],
+        getAnalyticsReport: ['/api/report/analytics', 'GET'],
         getDriveFileLink: ['/api/report/link', 'GET'],
         getSetupStatus: ['/api/setup-status', 'GET'],
         listMonthlyReports: ['/api/report/monthly', 'GET'],
@@ -82,7 +83,18 @@ export const base44 = {
       const route = routes[name];
       if (!route) throw new Error(`Unknown function: ${name}`);
       const [path, method] = route;
-      const payload = await api(path, {
+      const query = new URLSearchParams();
+      if (method === 'GET') {
+        Object.entries(body).forEach(([key, value]) => {
+          if (value !== undefined && value !== null && value !== '') {
+            query.set(key, String(value));
+          }
+        });
+      }
+      const requestPath = method === 'GET' && query.toString()
+        ? `${path}?${query.toString()}`
+        : path;
+      const payload = await api(requestPath, {
         method,
         ...(method === 'GET' ? {} : { body: JSON.stringify(body) })
       });

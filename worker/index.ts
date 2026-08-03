@@ -27,6 +27,7 @@ import {
   updateStaff
 } from './db';
 import { createMonthlyReport, exportReport } from './report';
+import { getReportAnalytics } from './report-analytics';
 import { processScanRequest } from './scan-shifts';
 import { normalizePersonName } from './staff-config';
 import { getBackupStatus, runNightlyBackup } from './backup';
@@ -573,6 +574,15 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
 
     if (url.pathname === '/api/report/export' && method === 'POST') {
       return json(await exportReport(env, 'manual'));
+    }
+
+    if (url.pathname === '/api/report/analytics' && method === 'GET') {
+      return json(await getReportAnalytics(env, {
+        period: url.searchParams.get('period'),
+        anchor: url.searchParams.get('anchor'),
+        business: url.searchParams.get('business'),
+        department: url.searchParams.get('department')
+      }));
     }
 
     if (url.pathname === '/api/report/monthly' && method === 'GET') {

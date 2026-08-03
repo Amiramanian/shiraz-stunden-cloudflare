@@ -10,6 +10,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
+import AnalyticsReport from '@/components/worktime/AnalyticsReport';
 
 function nextMonthValue() {
   const now = new Date();
@@ -205,6 +206,8 @@ export default function ReportsView({ onBack }) {
         <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
         {refreshing ? 'Wird aktualisiert...' : 'Jetzt aktualisieren'}
       </button>
+
+      <AnalyticsReport />
 
       <section className="space-y-3 rounded-2xl border border-blue-200 bg-blue-50 p-4">
         <div>

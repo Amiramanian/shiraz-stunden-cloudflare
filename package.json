@@ -14,7 +14,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "typecheck": "tsc -p tsconfig.worker.json --noEmit",
     "lint": "eslint . --quiet",
-    "test:scan": "node --test tests/scan-normalization.test.ts tests/time-utils.test.js"
+    "test:scan": "node --test tests/scan-normalization.test.ts tests/time-utils.test.js tests/report-analytics.test.ts"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
