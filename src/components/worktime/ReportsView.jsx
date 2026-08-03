@@ -1,6 +1,34 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { ArrowLeft, CheckCircle2, CircleAlert, Database, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import {
+  ArrowLeft,
+  CalendarPlus,
+  CheckCircle2,
+  CircleAlert,
+  Database,
+  ExternalLink,
+  FileSpreadsheet,
+  RefreshCw
+} from 'lucide-react';
 import { base44 } from '@/api/base44Client';
+
+function nextMonthValue() {
+  const now = new Date();
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthLabel(value) {
+  if (!/^\d{4}-\d{2}$/.test(value)) return value;
+  return new Intl.DateTimeFormat('de-DE', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Europe/Berlin'
+  }).format(new Date(`${value}-01T12:00:00Z`));
+}
+
+function suggestedFileName(value) {
+  return `Arbeitszeiten – ${monthLabel(value)}`;
+}
 
 function StatusRow({ ok, label, detail }) {
   return (
@@ -23,20 +51,30 @@ export default function ReportsView({ onBack }) {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [monthlyReports, setMonthlyReports] = useState([]);
+  const [monthlyCreating, setMonthlyCreating] = useState(false);
+  const [selectedMonth, setSelectedMonth] = useState(nextMonthValue);
+  const [monthlyFileName, setMonthlyFileName] = useState(() =>
+    suggestedFileName(nextMonthValue())
+  );
+  const [createdMonthlyReport, setCreatedMonthlyReport] = useState(null);
   const [message, setMessage] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [linkResult, statusResult] = await Promise.all([
+      const [linkResult, statusResult, monthlyResult] = await Promise.all([
         base44.functions.invoke('getDriveFileLink', {}),
-        base44.functions.invoke('getSetupStatus', {})
+        base44.functions.invoke('getSetupStatus', {}),
+        base44.functions.invoke('listMonthlyReports', {})
       ]);
       setLink(linkResult.data.webViewLink);
       setStatus(statusResult.data);
+      setMonthlyReports(Array.isArray(monthlyResult.data) ? monthlyResult.data : []);
     } catch {
       setLink(null);
       setStatus(null);
+      setMonthlyReports([]);
     } finally {
       setLoading(false);
     }
@@ -63,6 +101,36 @@ export default function ReportsView({ onBack }) {
       await load();
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  function changeSelectedMonth(event) {
+    const month = event.target.value;
+    setSelectedMonth(month);
+    setMonthlyFileName(suggestedFileName(month));
+    setCreatedMonthlyReport(null);
+    setMessage('');
+  }
+
+  async function createMonthFile() {
+    setMonthlyCreating(true);
+    setCreatedMonthlyReport(null);
+    setMessage('');
+    try {
+      const response = await base44.functions.invoke('createMonthlyReport', {
+        month: selectedMonth,
+        fileName: monthlyFileName
+      });
+      setCreatedMonthlyReport(response.data);
+      setMessage(
+        `Monatsdatei erstellt: ${response.data.shiftCount} Schichten und ` +
+        `${response.data.hinweisCount} Hinweise für ${monthLabel(selectedMonth)}.`
+      );
+      await load();
+    } catch (error) {
+      setMessage(`Fehler: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setMonthlyCreating(false);
     }
   }
 
@@ -96,6 +164,15 @@ export default function ReportsView({ onBack }) {
               ? 'Service Account ist konfiguriert'
               : 'Service-Account-Secrets fehlen noch'}
           />
+          <StatusRow
+            ok={Boolean(status?.googleSheet?.monthlyDriveConfigured)}
+            label="Monatsdateien in Google Drive"
+            detail={status?.googleSheet?.monthlyDriveConfigured
+              ? status?.googleSheet?.monthlyDriveFolderConfigured
+                ? 'OAuth verbunden · Zielordner konfiguriert'
+                : 'OAuth verbunden · Speicherung im Drive-Hauptordner'
+              : 'Einmalige Google-OAuth-Verbindung fehlt noch'}
+          />
           {lastExport && (
             <StatusRow
               ok={lastExport.status === 'success'}
@@ -128,6 +205,97 @@ export default function ReportsView({ onBack }) {
         <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
         {refreshing ? 'Wird aktualisiert...' : 'Jetzt aktualisieren'}
       </button>
+
+      <section className="space-y-3 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+        <div>
+          <h3 className="flex items-center gap-2 font-bold text-blue-950">
+            <CalendarPlus size={20} /> Monatsdatei erstellen
+          </h3>
+          <p className="mt-1 text-xs text-blue-800">
+            Erstellt eine neue, private Datei mit demselben Aufbau und nur den Daten des gewählten Monats.
+          </p>
+        </div>
+
+        <label className="block text-sm font-semibold text-neutral-800">
+          Monat
+          <input
+            type="month"
+            value={selectedMonth}
+            onChange={changeSelectedMonth}
+            className="mt-1 w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-base"
+          />
+        </label>
+
+        <label className="block text-sm font-semibold text-neutral-800">
+          Dateiname
+          <input
+            type="text"
+            value={monthlyFileName}
+            maxLength={120}
+            onChange={(event) => setMonthlyFileName(event.target.value)}
+            className="mt-1 w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-base"
+            placeholder="Arbeitszeiten – August 2026"
+          />
+        </label>
+
+        <button
+          onClick={createMonthFile}
+          disabled={
+            monthlyCreating ||
+            !status?.googleSheet?.monthlyDriveConfigured ||
+            !selectedMonth ||
+            !monthlyFileName.trim() ||
+            monthlyReports.some((report) => report.reportMonth === selectedMonth)
+          }
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-800 py-3 font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <CalendarPlus size={18} />
+          {monthlyCreating ? 'Datei wird erstellt...' : 'Datei für diesen Monat erstellen'}
+        </button>
+
+        {!status?.googleSheet?.monthlyDriveConfigured && (
+          <p className="rounded-xl bg-amber-100 px-3 py-2 text-sm text-amber-900">
+            Die Funktion ist vorbereitet. Für die Aktivierung muss Google Drive einmalig über OAuth verbunden werden.
+          </p>
+        )}
+
+        {monthlyReports.some((report) => report.reportMonth === selectedMonth) && (
+          <p className="text-sm font-medium text-amber-800">
+            Für diesen Monat wurde bereits eine Datei erstellt.
+          </p>
+        )}
+
+        {createdMonthlyReport?.webViewLink && (
+          <a
+            href={createdMonthlyReport.webViewLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center gap-2 rounded-xl bg-emerald-700 py-3 font-bold text-white"
+          >
+            <ExternalLink size={18} /> Neue Monatsdatei öffnen
+          </a>
+        )}
+      </section>
+
+      {monthlyReports.length > 0 && (
+        <section className="space-y-2 rounded-2xl border border-neutral-200 bg-white p-4">
+          <h3 className="font-bold text-neutral-800">Vorhandene Monatsdateien</h3>
+          {monthlyReports.map((report) => (
+            <a
+              key={report.id}
+              href={report.webViewLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-between gap-3 rounded-xl bg-neutral-50 px-3 py-2 text-sm text-blue-800 hover:bg-blue-50"
+            >
+              <span className="min-w-0 truncate">
+                {monthLabel(report.reportMonth)} · {report.fileName}
+              </span>
+              <ExternalLink size={16} className="shrink-0" />
+            </a>
+          ))}
+        </section>
+      )}
 
       {message && <p className="text-center text-sm text-neutral-600">{message}</p>}
 

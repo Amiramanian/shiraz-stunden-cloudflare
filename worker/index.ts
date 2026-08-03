@@ -14,6 +14,7 @@ import {
   getHinweis,
   getShift,
   listHinweise,
+  listMonthlyReports,
   listShifts,
   listStaff,
   logAudit,
@@ -25,7 +26,7 @@ import {
   updateShift,
   updateStaff
 } from './db';
-import { exportReport } from './report';
+import { createMonthlyReport, exportReport } from './report';
 import { processScanRequest } from './scan-shifts';
 import { normalizePersonName } from './staff-config';
 import { getBackupStatus, runNightlyBackup } from './backup';
@@ -300,7 +301,13 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       googleSheet: {
         spreadsheetId: env.GOOGLE_SPREADSHEET_ID || null,
         webViewLink: env.GOOGLE_SHEET_URL || null,
-        serviceAccountConfigured: Boolean(env.GOOGLE_CLIENT_EMAIL && env.GOOGLE_PRIVATE_KEY)
+        serviceAccountConfigured: Boolean(env.GOOGLE_CLIENT_EMAIL && env.GOOGLE_PRIVATE_KEY),
+        monthlyDriveConfigured: Boolean(
+          env.GOOGLE_OAUTH_CLIENT_ID &&
+          env.GOOGLE_OAUTH_CLIENT_SECRET &&
+          env.GOOGLE_OAUTH_REFRESH_TOKEN
+        ),
+        monthlyDriveFolderConfigured: Boolean(env.GOOGLE_DRIVE_FOLDER_ID)
       },
       accessProtection: {
         required: (env.REQUIRE_ACCESS || 'false').toLowerCase() === 'true',
@@ -566,6 +573,23 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
 
     if (url.pathname === '/api/report/export' && method === 'POST') {
       return json(await exportReport(env, 'manual'));
+    }
+
+    if (url.pathname === '/api/report/monthly' && method === 'GET') {
+      return json(await listMonthlyReports(env));
+    }
+
+    if (url.pathname === '/api/report/monthly' && method === 'POST') {
+      const body = await readJson<{ month?: unknown; fileName?: unknown }>(request);
+      const result = await createMonthlyReport(env, body.month, body.fileName);
+      await logAudit(env, 'create', 'monthly_report', result.id, {
+        reportMonth: result.reportMonth,
+        fileName: result.fileName,
+        spreadsheetId: result.spreadsheetId,
+        shiftCount: result.shiftCount,
+        hinweisCount: result.hinweisCount
+      }, email);
+      return json(result, 201);
     }
 
     if (url.pathname === '/api/scan-shifts/status' && method === 'GET') {

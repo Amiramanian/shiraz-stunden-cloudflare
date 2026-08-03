@@ -1,7 +1,22 @@
 import type { Env } from './types';
-import { listHinweise, listShifts, listStaff } from './db';
+import {
+  createMonthlyReportRecord,
+  getMonthlyReportByMonth,
+  listHinweise,
+  listShifts,
+  listStaff
+} from './db';
 import { buildSheetPlans } from './report-data';
-import { updateGoogleSpreadsheet } from './google-sheets';
+import {
+  createMonthlyGoogleSpreadsheet,
+  isMonthlyGoogleDriveConfigured,
+  removeMonthlyGoogleSpreadsheet,
+  updateGoogleSpreadsheet
+} from './google-sheets';
+import {
+  isDateInReportMonth,
+  validateMonthlyReportInput
+} from './monthly-report';
 
 const EXPORT_LOCK_NAME = 'google-report';
 const EXPORT_LOCK_SECONDS = 180;
@@ -78,5 +93,55 @@ export async function exportReport(env: Env, triggerType: 'manual' | 'scheduled'
         message: error instanceof Error ? error.message : String(error)
       }));
     });
+  }
+}
+
+export async function createMonthlyReport(
+  env: Env,
+  monthValue: unknown,
+  nameValue: unknown
+) {
+  const { month, fileName } = validateMonthlyReportInput(monthValue, nameValue);
+  if (!isMonthlyGoogleDriveConfigured(env)) {
+    throw new Error('Google Drive Monatsdateien sind noch nicht über OAuth verbunden.');
+  }
+  const existing = await getMonthlyReportByMonth(env, month);
+  if (existing) {
+    throw new Error(`Für ${month} existiert bereits die Datei „${existing.fileName}“.`);
+  }
+
+  const owner = `monthly-${crypto.randomUUID()}`;
+  await acquireExportLock(env, owner);
+  let createdSpreadsheetId = '';
+  try {
+    const [allShifts, allHinweise, staff] = await Promise.all([
+      listShifts(env),
+      listHinweise(env),
+      listStaff(env)
+    ]);
+    const shifts = allShifts.filter((shift) => isDateInReportMonth(shift.date, month));
+    const hinweise = allHinweise.filter((note) => isDateInReportMonth(note.date, month));
+    const plans = buildSheetPlans(shifts, hinweise, staff);
+    const spreadsheet = await createMonthlyGoogleSpreadsheet(env, fileName, plans);
+    createdSpreadsheetId = spreadsheet.spreadsheetId;
+    const record = await createMonthlyReportRecord(env, {
+      reportMonth: month,
+      fileName,
+      spreadsheetId: spreadsheet.spreadsheetId,
+      webViewLink: spreadsheet.webViewLink
+    });
+    return {
+      ...record,
+      shiftCount: shifts.length,
+      hinweisCount: hinweise.length,
+      updatedSheets: spreadsheet.updatedSheets
+    };
+  } catch (error) {
+    if (createdSpreadsheetId) {
+      await removeMonthlyGoogleSpreadsheet(env, createdSpreadsheetId).catch(() => {});
+    }
+    throw error;
+  } finally {
+    await releaseExportLock(env, owner).catch(() => {});
   }
 }

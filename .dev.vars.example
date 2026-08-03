@@ -4,6 +4,14 @@ GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\
 GOOGLE_SPREADSHEET_ID=your_google_sheet_id
 GOOGLE_SHEET_URL=https://docs.google.com/spreadsheets/d/your_google_sheet_id/edit
 
+# Optional monthly files in the signed-in owner's Google Drive.
+# The OAuth grant must include the Sheets and Drive file scopes.
+GOOGLE_OAUTH_CLIENT_ID=your-oauth-client-id
+GOOGLE_OAUTH_CLIENT_SECRET=your-oauth-client-secret
+GOOGLE_OAUTH_REFRESH_TOKEN=your-oauth-refresh-token
+# Leave empty to create monthly files in the Drive root.
+GOOGLE_DRIVE_FOLDER_ID=
+
 # Gemini is the last photo-scan fallback after the Workers AI binding.
 # Create a key at https://aistudio.google.com/app/apikey
 GEMINI_API_KEY=your-gemini-api-key

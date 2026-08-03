@@ -48,6 +48,32 @@ The spreadsheet already contains these tabs:
 - Fr Bobrik
 - hidden raw-data tabs
 
+## Monthly Drive files
+
+The Reports page can create one private Google Spreadsheet per selected month.
+The month picker defaults to the next month, the file name is editable, and the
+new file contains the same tabs and formatting but only shifts and notes from
+the selected month. Existing monthly files stay listed on the Reports page.
+
+Monthly files must be owned by the signed-in Google user, so they use a separate
+OAuth grant with these scopes:
+
+```text
+https://www.googleapis.com/auth/spreadsheets
+https://www.googleapis.com/auth/drive.file
+```
+
+Store the OAuth values as Worker secrets:
+
+```bash
+npx wrangler secret put GOOGLE_OAUTH_CLIENT_ID
+npx wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
+npx wrangler secret put GOOGLE_OAUTH_REFRESH_TOKEN
+```
+
+Optionally set `GOOGLE_DRIVE_FOLDER_ID` to place the files in a selected Drive
+folder. Without it, files are created privately in the user's Drive root.
+
 ## Cloudflare setup order
 
 1. Create D1 database: `shiraz-stunden-db`

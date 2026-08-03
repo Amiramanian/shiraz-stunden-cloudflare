@@ -1,6 +1,7 @@
 import type {
   Env,
   HinweisRecord,
+  MonthlyReportRecord,
   ScanCorrectionInput,
   ShiftRecord,
   StaffMemberRecord
@@ -10,6 +11,66 @@ import {
   getChangedCorrectionFields,
   isActualScanCorrection
 } from './scan-corrections.ts';
+
+function mapMonthlyReport(row: Record<string, unknown>): MonthlyReportRecord {
+  return {
+    id: String(row.id),
+    reportMonth: String(row.report_month),
+    fileName: String(row.file_name),
+    spreadsheetId: String(row.spreadsheet_id),
+    webViewLink: String(row.web_view_link),
+    createdAt: String(row.created_at)
+  };
+}
+
+export async function listMonthlyReports(env: Env): Promise<MonthlyReportRecord[]> {
+  const result = await env.DB.prepare(`
+    SELECT id, report_month, file_name, spreadsheet_id, web_view_link, created_at
+    FROM monthly_reports
+    ORDER BY report_month DESC, created_at DESC
+  `).all();
+  return (result.results || []).map((row) =>
+    mapMonthlyReport(row as Record<string, unknown>)
+  );
+}
+
+export async function getMonthlyReportByMonth(
+  env: Env,
+  reportMonth: string
+): Promise<MonthlyReportRecord | null> {
+  const row = await env.DB.prepare(`
+    SELECT id, report_month, file_name, spreadsheet_id, web_view_link, created_at
+    FROM monthly_reports
+    WHERE report_month = ?
+    LIMIT 1
+  `).bind(reportMonth).first();
+  return row ? mapMonthlyReport(row as Record<string, unknown>) : null;
+}
+
+export async function createMonthlyReportRecord(
+  env: Env,
+  input: Omit<MonthlyReportRecord, 'id' | 'createdAt'>
+): Promise<MonthlyReportRecord> {
+  const id = crypto.randomUUID();
+  await env.DB.prepare(`
+    INSERT INTO monthly_reports (
+      id, report_month, file_name, spreadsheet_id, web_view_link
+    ) VALUES (?, ?, ?, ?, ?)
+  `).bind(
+    id,
+    input.reportMonth,
+    input.fileName,
+    input.spreadsheetId,
+    input.webViewLink
+  ).run();
+  const created = await env.DB.prepare(`
+    SELECT id, report_month, file_name, spreadsheet_id, web_view_link, created_at
+    FROM monthly_reports
+    WHERE id = ?
+  `).bind(id).first();
+  if (!created) throw new Error('Monatsdatei konnte nicht gespeichert werden.');
+  return mapMonthlyReport(created as Record<string, unknown>);
+}
 
 function mapShift(row: Record<string, unknown>): ShiftRecord {
   return {

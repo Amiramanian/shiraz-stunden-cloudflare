@@ -7,6 +7,10 @@ export interface Env extends Cloudflare.Env {
 
   GOOGLE_CLIENT_EMAIL: string;
   GOOGLE_PRIVATE_KEY: string;
+  GOOGLE_OAUTH_CLIENT_ID?: string;
+  GOOGLE_OAUTH_CLIENT_SECRET?: string;
+  GOOGLE_OAUTH_REFRESH_TOKEN?: string;
+  GOOGLE_DRIVE_FOLDER_ID?: string;
 
   GEMINI_API_KEY: string;
 }
@@ -38,6 +42,15 @@ export interface StaffMemberRecord {
   employee: string;
   employeeKey: string;
   hidden: boolean;
+}
+
+export interface MonthlyReportRecord {
+  id: string;
+  reportMonth: string;
+  fileName: string;
+  spreadsheetId: string;
+  webViewLink: string;
+  createdAt: string;
 }
 
 export interface ScannedShift {

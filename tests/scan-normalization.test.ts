@@ -20,6 +20,10 @@ import {
   isActualScanCorrection
 } from '../worker/scan-corrections.ts';
 import { compareBackupTables } from '../worker/backup.ts';
+import {
+  isDateInReportMonth,
+  validateMonthlyReportInput
+} from '../worker/monthly-report.ts';
 
 function flattenBusiness(
   config: Record<string, Record<string, string[]>>,
@@ -103,6 +107,19 @@ test('server staff config combines the built-in roster with visible D1 staff', (
   assert.equal(config.Djadoo.Technik, undefined);
   assert.equal(config.Shiraz.Betriebsleiter, undefined);
   assert.equal(config.Catering, undefined);
+});
+
+test('monthly reports validate names and include only the selected month', () => {
+  assert.deepEqual(
+    validateMonthlyReportInput('2026-08', '  Arbeitszeiten   August 2026  '),
+    { month: '2026-08', fileName: 'Arbeitszeiten August 2026' }
+  );
+  assert.equal(isDateInReportMonth('2026-08-01', '2026-08'), true);
+  assert.equal(isDateInReportMonth('2026-07-31', '2026-08'), false);
+  assert.throws(
+    () => validateMonthlyReportInput('2026-13', 'Arbeitszeiten'),
+    /YYYY-MM/
+  );
 });
 
 test('canonical scan aliases resolve known handwriting variants', () => {

@@ -75,7 +75,9 @@ export const base44 = {
       const routes = {
         exportToGoogleDrive: ['/api/report/export', 'POST'],
         getDriveFileLink: ['/api/report/link', 'GET'],
-        getSetupStatus: ['/api/setup-status', 'GET']
+        getSetupStatus: ['/api/setup-status', 'GET'],
+        listMonthlyReports: ['/api/report/monthly', 'GET'],
+        createMonthlyReport: ['/api/report/monthly', 'POST']
       };
       const route = routes[name];
       if (!route) throw new Error(`Unknown function: ${name}`);

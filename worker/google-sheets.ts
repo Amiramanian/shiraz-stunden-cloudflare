@@ -6,6 +6,23 @@ interface GoogleTokenCache {
   expiresAt: number;
 }
 
+type GoogleAuthMode = 'service' | 'user';
+
+export interface SpreadsheetUpdateOptions {
+  spreadsheetId?: string;
+  authMode?: GoogleAuthMode;
+  webViewLink?: string;
+  cleanObsoleteManagedSheets?: boolean;
+  protectionEditorEmail?: string | null;
+}
+
+export interface CreatedMonthlySpreadsheet {
+  spreadsheetId: string;
+  webViewLink: string;
+  updatedSheets: number;
+  removedSheets: string[];
+}
+
 interface GoogleValueRange {
   range?: string;
   values?: Array<Array<string | number | boolean>>;
@@ -19,6 +36,7 @@ const OBSOLETE_MANAGED_SHEETS = new Set(['Technik Djadoo']);
 
 // Global token cache (in-memory during Worker execution)
 let tokenCache: GoogleTokenCache | null = null;
+let userTokenCache: GoogleTokenCache | null = null;
 
 /**
  * Encodes bytes to base64url format (RFC 4648 Table 2)
@@ -132,6 +150,50 @@ async function getGoogleAccessToken(env: Env): Promise<string> {
   return tokenCache.token;
 }
 
+async function getGoogleUserAccessToken(env: Env): Promise<string> {
+  if (userTokenCache && userTokenCache.expiresAt > Date.now() + 60_000) {
+    return userTokenCache.token;
+  }
+
+  if (
+    !env.GOOGLE_OAUTH_CLIENT_ID ||
+    !env.GOOGLE_OAUTH_CLIENT_SECRET ||
+    !env.GOOGLE_OAUTH_REFRESH_TOKEN
+  ) {
+    throw new Error(
+      'Google Drive Monatsdateien sind noch nicht verbunden. OAuth-Zugang fehlt.'
+    );
+  }
+
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: env.GOOGLE_OAUTH_CLIENT_ID,
+      client_secret: env.GOOGLE_OAUTH_CLIENT_SECRET,
+      refresh_token: env.GOOGLE_OAUTH_REFRESH_TOKEN
+    }).toString()
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Google OAuth Verbindung wurde abgelehnt (${response.status}). ` +
+      'Bitte OAuth-Zugang und Refresh-Token prüfen.'
+    );
+  }
+
+  const data = (await response.json()) as {
+    access_token: string;
+    expires_in?: number;
+  };
+  userTokenCache = {
+    token: data.access_token,
+    expiresAt: Date.now() + (data.expires_in || 3600) * 1000
+  };
+  return userTokenCache.token;
+}
+
 /**
  * Sleep helper for retry delays
  */
@@ -147,13 +209,16 @@ function wait(milliseconds: number): Promise<void> {
 async function googleFetch<T>(
   env: Env,
   url: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  authMode: GoogleAuthMode = 'service'
 ): Promise<T> {
   const retryableStatuses = new Set([429, 500, 502, 503, 504]);
   const maxAttempts = 6;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const token = await getGoogleAccessToken(env);
+    const token = authMode === 'user'
+      ? await getGoogleUserAccessToken(env)
+      : await getGoogleAccessToken(env);
     const response = await fetch(url, {
       ...init,
       headers: {
@@ -164,7 +229,9 @@ async function googleFetch<T>(
     });
 
     if (response.ok) {
-      return (await response.json()) as T;
+      if (response.status === 204) return undefined as T;
+      const responseText = await response.text();
+      return (responseText ? JSON.parse(responseText) : undefined) as T;
     }
 
     const responseText = await response.text();
@@ -206,14 +273,17 @@ function rowsForRange(
 
 async function assertObsoleteSheetHasNoSourceData(
   env: Env,
-  spreadsheetId: string
+  spreadsheetId: string,
+  authMode: GoogleAuthMode
 ): Promise<void> {
   const query = new URLSearchParams({ majorDimension: 'ROWS' });
   query.append('ranges', `${escapeSheetTitle('Bearbeiten_Schichten')}!A:H`);
   query.append('ranges', `${escapeSheetTitle('Bearbeiten_Mitarbeiter')}!A:E`);
   const sourceData = await googleFetch<GoogleBatchGetResponse>(
     env,
-    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchGet?${query}`
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchGet?${query}`,
+    {},
+    authMode
   );
 
   const shiftRows = rowsForRange(sourceData, 'Bearbeiten_Schichten').slice(1);
@@ -588,14 +658,10 @@ function buildFormattingRequests(
 }
 
 function buildProtectionRequests(
-  env: Env,
   plans: SheetPlan[],
-  metadata: SheetMetadata
+  metadata: SheetMetadata,
+  editorEmail: string | null
 ): Record<string, unknown>[] {
-  if (!env.GOOGLE_CLIENT_EMAIL) {
-    throw new Error('GOOGLE_CLIENT_EMAIL is not configured.');
-  }
-
   const metadataByTitle = new Map(
     metadata.sheets.map((sheet) => [sheet.properties.title, sheet])
   );
@@ -609,14 +675,12 @@ function buildProtectionRequests(
     const existing = sheet.protectedRanges?.find(
       (protectedRange) => protectedRange.description === description
     );
-    const protectedRange = {
+    const protectedRange: Record<string, unknown> = {
       range: { sheetId: sheet.properties.sheetId },
       description,
-      warningOnly: false,
-      editors: {
-        users: [env.GOOGLE_CLIENT_EMAIL]
-      }
+      warningOnly: false
     };
+    if (editorEmail) protectedRange.editors = { users: [editorEmail] };
 
     if (existing) {
       requests.push({
@@ -625,7 +689,9 @@ function buildProtectionRequests(
             protectedRangeId: existing.protectedRangeId,
             ...protectedRange
           },
-          fields: 'range,description,warningOnly,editors'
+          fields: editorEmail
+            ? 'range,description,warningOnly,editors'
+            : 'range,description,warningOnly'
         }
       });
     } else {
@@ -646,9 +712,15 @@ function buildProtectionRequests(
  */
 export async function updateGoogleSpreadsheet(
   env: Env,
-  plans: SheetPlan[]
+  plans: SheetPlan[],
+  options: SpreadsheetUpdateOptions = {}
 ): Promise<Record<string, unknown>> {
-  const spreadsheetId = env.GOOGLE_SPREADSHEET_ID;
+  const spreadsheetId = options.spreadsheetId || env.GOOGLE_SPREADSHEET_ID;
+  const authMode = options.authMode || 'service';
+  const cleanObsoleteManagedSheets = options.cleanObsoleteManagedSheets ?? authMode === 'service';
+  const protectionEditorEmail = options.protectionEditorEmail === undefined
+    ? env.GOOGLE_CLIENT_EMAIL || null
+    : options.protectionEditorEmail;
   if (!spreadsheetId || spreadsheetId.startsWith('REPLACE_')) {
     throw new Error('GOOGLE_SPREADSHEET_ID is not configured.');
   }
@@ -656,20 +728,20 @@ export async function updateGoogleSpreadsheet(
   // Fetch existing sheets metadata
   let metadata = await googleFetch<SheetMetadata>(
     env,
-    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties,protectedRanges(protectedRangeId,description))`
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties,protectedRanges(protectedRangeId,description))`,
+    {},
+    authMode
   );
 
-  const existingTitles = new Set(
-    metadata.sheets.map((sheet) => sheet.properties.title)
-  );
   const plannedTitles = new Set(plans.map((plan) => plan.title));
   const obsoleteSheets = metadata.sheets.filter((sheet) =>
+    cleanObsoleteManagedSheets &&
     OBSOLETE_MANAGED_SHEETS.has(sheet.properties.title) &&
     !plannedTitles.has(sheet.properties.title)
   );
 
   if (obsoleteSheets.length) {
-    await assertObsoleteSheetHasNoSourceData(env, spreadsheetId);
+    await assertObsoleteSheetHasNoSourceData(env, spreadsheetId, authMode);
     await googleFetch(
       env,
       `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`,
@@ -680,13 +752,20 @@ export async function updateGoogleSpreadsheet(
             deleteSheet: { sheetId: sheet.properties.sheetId }
           }))
         })
-      }
+      },
+      authMode
     );
     metadata = await googleFetch<SheetMetadata>(
       env,
-      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties,protectedRanges(protectedRangeId,description))`
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties,protectedRanges(protectedRangeId,description))`,
+      {},
+      authMode
     );
   }
+
+  const existingTitles = new Set(
+    metadata.sheets.map((sheet) => sheet.properties.title)
+  );
 
   // Create requests for missing sheets
   const addRequests = plans
@@ -704,7 +783,8 @@ export async function updateGoogleSpreadsheet(
             )
           }
         }
-      }
+      },
+      authMode
     }));
 
   // Create missing sheets
@@ -721,7 +801,9 @@ export async function updateGoogleSpreadsheet(
     // Refresh metadata to get new sheet IDs
     metadata = await googleFetch<SheetMetadata>(
       env,
-      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties,protectedRanges(protectedRangeId,description))`
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties,protectedRanges(protectedRangeId,description))`,
+      {},
+      authMode
     );
   }
 
@@ -738,7 +820,8 @@ export async function updateGoogleSpreadsheet(
     {
       method: 'POST',
       body: JSON.stringify({ ranges: clearRanges })
-    }
+    },
+    authMode
   );
 
   // Write new data to sheets
@@ -755,7 +838,8 @@ export async function updateGoogleSpreadsheet(
           values: plan.values
         }))
       })
-    }
+    },
+    authMode
   );
 
   // Build formatting requests for all sheets
@@ -767,7 +851,7 @@ export async function updateGoogleSpreadsheet(
     }
     formattingRequests.push(...buildFormattingRequests(plan, sheetId));
   }
-  formattingRequests.push(...buildProtectionRequests(env, plans, metadata));
+  formattingRequests.push(...buildProtectionRequests(plans, metadata, protectionEditorEmail));
 
   // Apply formatting requests in batches (Google API limits request size)
   const chunkSize = 300;
@@ -780,16 +864,133 @@ export async function updateGoogleSpreadsheet(
         body: JSON.stringify({
           requests: formattingRequests.slice(start, start + chunkSize)
         })
-      }
+      },
+      authMode
     );
   }
 
   return {
     spreadsheetId,
     webViewLink:
-      env.GOOGLE_SHEET_URL ||
+      options.webViewLink ||
+      (options.spreadsheetId ? null : env.GOOGLE_SHEET_URL) ||
       `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
     updatedSheets: plans.length,
     removedSheets: obsoleteSheets.map((sheet) => sheet.properties.title)
   };
+}
+
+function initialSheetProperties(plan: SheetPlan) {
+  return {
+    title: plan.title,
+    hidden: Boolean(plan.hidden),
+    gridProperties: {
+      rowCount: Math.max(plan.values.length + 20, 100),
+      columnCount: Math.max(...plan.values.map((row) => row.length), 2)
+    }
+  };
+}
+
+async function moveUserSpreadsheetToConfiguredFolder(
+  env: Env,
+  spreadsheetId: string
+): Promise<void> {
+  if (!env.GOOGLE_DRIVE_FOLDER_ID) return;
+
+  const file = await googleFetch<{ parents?: string[] }>(
+    env,
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(spreadsheetId)}?fields=parents&supportsAllDrives=true`,
+    {},
+    'user'
+  );
+  const query = new URLSearchParams({
+    addParents: env.GOOGLE_DRIVE_FOLDER_ID,
+    supportsAllDrives: 'true',
+    fields: 'id,parents'
+  });
+  if (file.parents?.length) query.set('removeParents', file.parents.join(','));
+  await googleFetch(
+    env,
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(spreadsheetId)}?${query}`,
+    { method: 'PATCH', body: '{}' },
+    'user'
+  );
+}
+
+async function deleteUserDriveFile(env: Env, fileId: string): Promise<void> {
+  await googleFetch(
+    env,
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`,
+    { method: 'DELETE' },
+    'user'
+  );
+}
+
+export async function createMonthlyGoogleSpreadsheet(
+  env: Env,
+  title: string,
+  plans: SheetPlan[]
+): Promise<CreatedMonthlySpreadsheet> {
+  const created = await googleFetch<{
+    spreadsheetId?: string;
+    spreadsheetUrl?: string;
+  }>(
+    env,
+    'https://sheets.googleapis.com/v4/spreadsheets?fields=spreadsheetId,spreadsheetUrl',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        properties: {
+          title,
+          locale: 'de_DE',
+          timeZone: env.APP_TIMEZONE || 'Europe/Berlin'
+        },
+        sheets: plans.map((plan) => ({ properties: initialSheetProperties(plan) }))
+      })
+    },
+    'user'
+  );
+  if (!created.spreadsheetId) {
+    throw new Error('Google hat keine ID für die Monatsdatei zurückgegeben.');
+  }
+
+  const spreadsheetId = created.spreadsheetId;
+  const webViewLink = created.spreadsheetUrl ||
+    `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+  try {
+    await moveUserSpreadsheetToConfiguredFolder(env, spreadsheetId);
+    const result = await updateGoogleSpreadsheet(env, plans, {
+      spreadsheetId,
+      authMode: 'user',
+      webViewLink,
+      cleanObsoleteManagedSheets: false,
+      protectionEditorEmail: null
+    });
+    return {
+      spreadsheetId,
+      webViewLink: String(result.webViewLink || webViewLink),
+      updatedSheets: Number(result.updatedSheets || plans.length),
+      removedSheets: Array.isArray(result.removedSheets)
+        ? result.removedSheets.map(String)
+        : []
+    };
+  } catch (error) {
+    await deleteUserDriveFile(env, spreadsheetId).catch(() => {});
+    throw error;
+  }
+}
+
+export function isMonthlyGoogleDriveConfigured(env: Env): boolean {
+  return Boolean(
+    env.GOOGLE_OAUTH_CLIENT_ID &&
+    env.GOOGLE_OAUTH_CLIENT_SECRET &&
+    env.GOOGLE_OAUTH_REFRESH_TOKEN
+  );
+}
+
+export async function removeMonthlyGoogleSpreadsheet(
+  env: Env,
+  spreadsheetId: string
+): Promise<void> {
+  await deleteUserDriveFile(env, spreadsheetId);
 }
