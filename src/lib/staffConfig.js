@@ -25,7 +25,7 @@ export const DJADOO_PERSONAL_STAFF = [
 ];
 
 export const SHIRAZ_DEPARTMENT_ORDER = ['Bar', 'Küche', 'Service', 'Fahrer', 'Catering', 'Technik'];
-export const DJADOO_DEPARTMENT_ORDER = ['Personal', 'Technik'];
+export const DJADOO_DEPARTMENT_ORDER = ['Personal'];
 
 // People who only get Hinweise (notes) — not part of any business/department, no shifts.
 export const HINWEIS_ONLY_STAFF = ['Fr Bobrik'];
@@ -75,7 +75,6 @@ export function buildEffectiveStaffConfig(additionalStaff = [], includeHidden = 
   config.Djadoo.Personal = uniqueNames([...DJADOO_PERSONAL_STAFF]);
 
   const shirazTechnikOnly = [];
-  const djadooTechnikOnly = [];
   const cateringOnly = [];
 
   // Collect globally hidden employee keys (hidden from the app, but kept in Excel)
@@ -104,7 +103,6 @@ export function buildEffectiveStaffConfig(additionalStaff = [], includeHidden = 
       return;
     }
     if (item.business === 'Djadoo' && item.department === 'Technik') {
-      djadooTechnikOnly.push(item.employee);
       return;
     }
 
@@ -124,13 +122,6 @@ export function buildEffectiveStaffConfig(additionalStaff = [], includeHidden = 
     shirazAllExceptTechnik.push(...config.Shiraz[dept]);
   });
   config.Shiraz.Technik = uniqueNames([...shirazAllExceptTechnik, ...shirazTechnikOnly]);
-
-  // Djadoo Technik = all Shiraz staff + Djadoo Personal + djadooTechnikOnly
-  config.Djadoo.Technik = uniqueNames([
-    ...shirazAllExceptTechnik,
-    ...config.Djadoo.Personal,
-    ...djadooTechnikOnly
-  ]);
 
   // Catering is a Shiraz department containing all operational staff.
   config.Shiraz.Catering = uniqueNames([

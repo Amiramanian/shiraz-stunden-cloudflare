@@ -100,6 +100,7 @@ test('server staff config combines the built-in roster with visible D1 staff', (
   assert.ok(config.Shiraz.Service.includes('Kianoush'));
   assert.ok(config.Shiraz.Fahrer.includes('Amir'));
   assert.ok(config.Shiraz.Bar.includes('Pascha'));
+  assert.equal(config.Djadoo.Technik, undefined);
   assert.equal(config.Shiraz.Betriebsleiter, undefined);
   assert.equal(config.Catering, undefined);
 });

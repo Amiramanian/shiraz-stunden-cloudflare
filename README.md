@@ -44,7 +44,6 @@ The spreadsheet already contains these tabs:
 - Fahrer
 - Technik
 - Personal Djadoo
-- Technik Djadoo
 - Catering (under Shiraz)
 - Fr Bobrik
 - hidden raw-data tabs

@@ -6,6 +6,17 @@ interface GoogleTokenCache {
   expiresAt: number;
 }
 
+interface GoogleValueRange {
+  range?: string;
+  values?: Array<Array<string | number | boolean>>;
+}
+
+interface GoogleBatchGetResponse {
+  valueRanges?: GoogleValueRange[];
+}
+
+const OBSOLETE_MANAGED_SHEETS = new Set(['Technik Djadoo']);
+
 // Global token cache (in-memory during Worker execution)
 let tokenCache: GoogleTokenCache | null = null;
 
@@ -181,6 +192,47 @@ async function googleFetch<T>(
  */
 function escapeSheetTitle(title: string): string {
   return `'${title.replace(/'/g, "''")}'`;
+}
+
+function rowsForRange(
+  response: GoogleBatchGetResponse,
+  title: string
+): Array<Array<string | number | boolean>> {
+  const titleKey = title.toLocaleLowerCase('de-DE');
+  return response.valueRanges?.find((valueRange) =>
+    (valueRange.range || '').toLocaleLowerCase('de-DE').includes(titleKey)
+  )?.values || [];
+}
+
+async function assertObsoleteSheetHasNoSourceData(
+  env: Env,
+  spreadsheetId: string
+): Promise<void> {
+  const query = new URLSearchParams({ majorDimension: 'ROWS' });
+  query.append('ranges', `${escapeSheetTitle('Bearbeiten_Schichten')}!A:H`);
+  query.append('ranges', `${escapeSheetTitle('Bearbeiten_Mitarbeiter')}!A:E`);
+  const sourceData = await googleFetch<GoogleBatchGetResponse>(
+    env,
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchGet?${query}`
+  );
+
+  const shiftRows = rowsForRange(sourceData, 'Bearbeiten_Schichten').slice(1);
+  const staffRows = rowsForRange(sourceData, 'Bearbeiten_Mitarbeiter').slice(1);
+  const djadooTechnikShifts = shiftRows.filter((row) =>
+    String(row[2] || '').trim() === 'Djadoo' &&
+    String(row[3] || '').trim() === 'Technik'
+  );
+  const djadooTechnikStaff = staffRows.filter((row) =>
+    String(row[1] || '').trim() === 'Djadoo' &&
+    String(row[2] || '').trim() === 'Technik'
+  );
+
+  if (djadooTechnikShifts.length || djadooTechnikStaff.length) {
+    throw new Error(
+      `Technik Djadoo was not removed because it still contains source data ` +
+      `(${djadooTechnikShifts.length} shifts, ${djadooTechnikStaff.length} staff records).`
+    );
+  }
 }
 
 interface SheetMetadata {
@@ -610,6 +662,31 @@ export async function updateGoogleSpreadsheet(
   const existingTitles = new Set(
     metadata.sheets.map((sheet) => sheet.properties.title)
   );
+  const plannedTitles = new Set(plans.map((plan) => plan.title));
+  const obsoleteSheets = metadata.sheets.filter((sheet) =>
+    OBSOLETE_MANAGED_SHEETS.has(sheet.properties.title) &&
+    !plannedTitles.has(sheet.properties.title)
+  );
+
+  if (obsoleteSheets.length) {
+    await assertObsoleteSheetHasNoSourceData(env, spreadsheetId);
+    await googleFetch(
+      env,
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          requests: obsoleteSheets.map((sheet) => ({
+            deleteSheet: { sheetId: sheet.properties.sheetId }
+          }))
+        })
+      }
+    );
+    metadata = await googleFetch<SheetMetadata>(
+      env,
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties,protectedRanges(protectedRangeId,description))`
+    );
+  }
 
   // Create requests for missing sheets
   const addRequests = plans
@@ -712,6 +789,7 @@ export async function updateGoogleSpreadsheet(
     webViewLink:
       env.GOOGLE_SHEET_URL ||
       `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
-    updatedSheets: plans.length
+    updatedSheets: plans.length,
+    removedSheets: obsoleteSheets.map((sheet) => sheet.properties.title)
   };
 }

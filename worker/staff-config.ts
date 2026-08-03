@@ -24,7 +24,7 @@ export const DJADOO_PERSONAL_STAFF = [
 export const HINWEIS_ONLY_STAFF = ['Fr Bobrik'];
 
 const SHIRAZ_DEPARTMENT_ORDER = ['Bar', 'Küche', 'Service', 'Fahrer', 'Catering', 'Technik'];
-const DJADOO_DEPARTMENT_ORDER = ['Personal', 'Technik'];
+const DJADOO_DEPARTMENT_ORDER = ['Personal'];
 
 const KNOWN_SCAN_NAME_ALIASES: Record<string, string> = {
   mirheidar: 'Mirheiydar',
@@ -319,7 +319,6 @@ export function buildEffectiveStaffConfig(additionalStaff: AdditionalStaff[] = [
   config.Djadoo.Personal = uniqueNames(DJADOO_PERSONAL_STAFF);
 
   const shirazTechnikOnly: string[] = [];
-  const djadooTechnikOnly: string[] = [];
   const cateringOnly: string[] = [];
   const hiddenEmployeeKeys = new Set<string>();
 
@@ -345,7 +344,6 @@ export function buildEffectiveStaffConfig(additionalStaff: AdditionalStaff[] = [
       continue;
     }
     if (item.business === 'Djadoo' && item.department === 'Technik') {
-      djadooTechnikOnly.push(item.employee);
       continue;
     }
 
@@ -361,11 +359,6 @@ export function buildEffectiveStaffConfig(additionalStaff: AdditionalStaff[] = [
     if (department !== 'Technik') shirazAllExceptTechnik.push(...employees);
   }
   config.Shiraz.Technik = uniqueNames([...shirazAllExceptTechnik, ...shirazTechnikOnly]);
-  config.Djadoo.Technik = uniqueNames([
-    ...shirazAllExceptTechnik,
-    ...config.Djadoo.Personal,
-    ...djadooTechnikOnly
-  ]);
   config.Shiraz.Catering = uniqueNames([
     ...shirazAllExceptTechnik,
     ...config.Djadoo.Personal,
