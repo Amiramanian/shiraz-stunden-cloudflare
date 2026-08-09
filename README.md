@@ -9,7 +9,8 @@ Independent migration of the previous Base44 work-time app to Cloudflare.
 - Cloudflare D1 database
 - One Google Sheet named `Arbeitszeiten – Shiraz & Djadoo`
 - Nightly Cloudflare Cron export to the same Google Sheet
-- Cloudflare Access will protect the production domain
+- Server-side PIN sessions protect all data routes; Cloudflare Access remains optional
+- GitHub CI, scheduled uptime checks, version rollback, and nightly backups protect production reliability
 
 ## Implemented in Phase 1
 
@@ -111,6 +112,23 @@ The current cron is:
 ```
 
 Cloudflare cron uses UTC, so this runs at 04:15 in German summer time and 03:15 in German winter time.
+
+The same scheduled event creates a versioned D1 snapshot in Cloudflare KV,
+compares it with the previous snapshot, removes versioned backups older than
+30 days, exports the current workbook, and removes expired login sessions.
+
+## Production validation and monitoring
+
+Run the same validation suite used by GitHub CI:
+
+```bash
+npm run check
+```
+
+The uptime workflow checks the website and the D1-backed health endpoint every
+30 minutes. It opens one GitHub issue while production is unavailable and
+closes that issue after recovery. Cloudflare deployment versions remain
+available for rollback.
 
 ## AI Schedule Scanner (Phase 3+)
 

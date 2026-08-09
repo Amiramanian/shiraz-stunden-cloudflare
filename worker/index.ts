@@ -245,6 +245,20 @@ function sanitizeSyncError(error: unknown): string {
     .slice(0, 500);
 }
 
+function scheduleReportExport(
+  ctx: ExecutionContext,
+  env: Env,
+  reason: 'staff_create' | 'staff_update' | 'shift_create' | 'hinweis_create'
+): void {
+  ctx.waitUntil(exportReport(env, 'manual').catch((error) => {
+    console.error(JSON.stringify({
+      event: 'background_report_export_failed',
+      reason,
+      message: sanitizeSyncError(error)
+    }));
+  }));
+}
+
 function parseStaff(input: Partial<StaffMemberRecord>): Omit<StaffMemberRecord, 'id' | 'hidden'> & { hidden?: boolean } {
   const employee = requireString(input.employee, 'Mitarbeiter');
   return {
@@ -260,8 +274,27 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
 
-  if (url.pathname === '/api/health') {
-    return json({ status: 'ok', app: 'shiraz-stunden', time: new Date().toISOString() });
+  if (url.pathname === '/api/health' && method === 'GET') {
+    try {
+      await env.DB.prepare('SELECT 1 AS ok').first();
+      return json({
+        status: 'ok',
+        app: 'shiraz-stunden',
+        database: 'ok',
+        time: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: 'health_check_failed',
+        message: sanitizeSyncError(error)
+      }));
+      return json({
+        status: 'degraded',
+        app: 'shiraz-stunden',
+        database: 'unavailable',
+        time: new Date().toISOString()
+      }, 503);
+    }
   }
 
   if (url.pathname === '/api/auth/status' && method === 'GET') {
@@ -378,7 +411,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       const input = parseStaff(await readJson(request));
       const created = await createStaff(env, input);
       await logAudit(env, 'create', 'staff_member', created.id, created, email);
-      ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
+      scheduleReportExport(ctx, env, 'staff_create');
       return json(created, 201);
     }
 
@@ -389,7 +422,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       const updated = await updateStaff(env, id, patch);
       if (!updated) return json({ error: 'Mitarbeiter nicht gefunden.' }, 404);
       await logAudit(env, 'update', 'staff_member', id, patch, email);
-      ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
+      scheduleReportExport(ctx, env, 'staff_update');
       return json(updated);
     }
 
@@ -408,7 +441,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       if (duplicate.length) return json({ error: 'Diese Schicht wurde bereits erfasst.' }, 409);
       const created = await createShift(env, input);
       await logAudit(env, 'create', 'shift', created.id, created, email);
-      ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
+      scheduleReportExport(ctx, env, 'shift_create');
       return json(created, 201);
     }
 
@@ -555,7 +588,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     if (url.pathname === '/api/hinweise' && method === 'POST') {
       const created = await createHinweis(env, parseHinweis(await readJson(request)));
       await logAudit(env, 'create', 'hinweis', created.id, created, email);
-      ctx.waitUntil(exportReport(env, 'manual').catch(() => {}));
+      scheduleReportExport(ctx, env, 'hinweis_create');
       return json(created, 201);
     }
 

@@ -1,0 +1,64 @@
+name: Uptime monitor
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: production-uptime
+  cancel-in-progress: true
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      SITE_URL: https://shirazstunden.com/
+      HEALTH_URL: https://shirazstunden.com/api/health
+      ISSUE_TITLE: '[Uptime] shirazstunden.com is unavailable'
+    steps:
+      - name: Check website and database health
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            --retry 3 --retry-all-errors --max-time 20 \
+            "$SITE_URL" > /dev/null
+          response="$(curl --fail --silent --show-error --location \
+            --retry 3 --retry-all-errors --max-time 20 \
+            "$HEALTH_URL")"
+          node -e 'const value=JSON.parse(process.argv[1]); if(value.status!=="ok" || value.database!=="ok") process.exit(1)' "$response"
+
+      - name: Open one outage issue
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --repo "$REPOSITORY" --state open \
+            --search "$ISSUE_TITLE in:title" --json number --jq '.[0].number // empty')"
+          if [ -z "$existing" ]; then
+            gh issue create --repo "$REPOSITORY" --title "$ISSUE_TITLE" \
+              --body "The automated production health check failed after three retries. Check Cloudflare deployments, D1, DNS, and recent changes."
+          else
+            gh issue comment "$existing" --repo "$REPOSITORY" \
+              --body "The scheduled health check is still failing at $(date -u +'%Y-%m-%d %H:%M UTC')."
+          fi
+
+      - name: Close outage issue after recovery
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --repo "$REPOSITORY" --state open \
+            --search "$ISSUE_TITLE in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --repo "$REPOSITORY" \
+              --comment "Production health checks recovered successfully."
+          fi
