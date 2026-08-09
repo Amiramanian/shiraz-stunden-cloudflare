@@ -2,6 +2,7 @@ export interface Env extends Cloudflare.Env {
   REQUIRE_ACCESS?: string;
   APP_PIN: string;
   LOGIN_RATE_LIMITER: RateLimit;
+  SCAN_RATE_LIMITER: RateLimit;
   BACKUPS: KVNamespace;
   AI: Ai;
 
@@ -10,8 +11,6 @@ export interface Env extends Cloudflare.Env {
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_SECRET?: string;
   GOOGLE_OAUTH_REFRESH_TOKEN?: string;
-  GOOGLE_DRIVE_FOLDER_ID?: string;
-
   GEMINI_API_KEY: string;
 }
 

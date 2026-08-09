@@ -24,8 +24,8 @@ Independent migration of the previous Base44 work-time app to Cloudflare.
 - Existing frontend flow migrated away from the Base44 SDK
 
 Photo schedule scanning uses local OCR hints plus a four-provider fallback
-chain: Cloudflare Mistral Vision, Cloudflare Moondream OCR, Cloudflare Gemma
-Vision, and Google Gemini. Confirmed corrections are learned and Google Sheets
+chain: Cloudflare Mistral Vision, Cloudflare Gemma Vision, Cloudflare Moondream
+OCR, and Google Gemini. Confirmed corrections are learned and Google Sheets
 is synchronized immediately.
 
 ## Google Sheet
@@ -71,8 +71,8 @@ npx wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
 npx wrangler secret put GOOGLE_OAUTH_REFRESH_TOKEN
 ```
 
-Optionally set `GOOGLE_DRIVE_FOLDER_ID` to place the files in a selected Drive
-folder. Without it, files are created privately in the user's Drive root.
+`GOOGLE_DRIVE_FOLDER_ID` is set to the private Drive folder
+`shiraz stunde data`, so all newly created monthly files are stored there.
 
 ## Cloudflare setup order
 
@@ -254,6 +254,7 @@ Response:
 - All data APIs require a valid server-side PIN session (or Cloudflare Access)
 - PIN sessions are random, stored as hashes in D1, expire after seven days, and use an HttpOnly/Secure/SameSite cookie
 - PIN login attempts are rate-limited to five per minute per client address
+- AI scans are rate-limited to twelve per minute per client address
 
 ### Provider behavior
 

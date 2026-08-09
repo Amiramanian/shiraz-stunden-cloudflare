@@ -9,8 +9,20 @@ import {
   LoaderCircle,
   Users
 } from 'lucide-react';
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
+import {
+  CartesianGrid,
+  Cell,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from 'recharts';
 import { base44 } from '@/api/base44Client';
+import MonthlyWeekdayComparison from './MonthlyWeekdayComparison';
 
 const CHART_COLORS = [
   '#1d4ed8',
@@ -48,6 +60,25 @@ function safeFilePart(value) {
     .replace(/^-+|-+$/g, '');
 }
 
+function datesBetween(startDate, endDate) {
+  const dates = [];
+  const current = new Date(`${startDate}T12:00:00Z`);
+  const end = new Date(`${endDate}T12:00:00Z`);
+  while (current <= end && dates.length < 370) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+function shortDate(value) {
+  return new Intl.DateTimeFormat('de-DE', {
+    day: '2-digit',
+    month: '2-digit',
+    timeZone: 'UTC'
+  }).format(new Date(`${value}T12:00:00Z`));
+}
+
 function SummaryCard({ icon: Icon, label, value }) {
   return (
     <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-3 text-center">
@@ -61,6 +92,7 @@ function SummaryCard({ icon: Icon, label, value }) {
 export default function AnalyticsReport() {
   const currentDate = useMemo(todayInBerlin, []);
   const [period, setPeriod] = useState('week');
+  const [dayAnchor, setDayAnchor] = useState(currentDate);
   const [weekAnchor, setWeekAnchor] = useState(currentDate);
   const [monthAnchor, setMonthAnchor] = useState(currentDate.slice(0, 7));
   const [business, setBusiness] = useState('all');
@@ -72,7 +104,11 @@ export default function AnalyticsReport() {
   const exportRef = useRef(null);
   const requestSequence = useRef(0);
 
-  const anchor = period === 'week' ? weekAnchor : monthAnchor;
+  const anchor = period === 'day'
+    ? dayAnchor
+    : period === 'week'
+      ? weekAnchor
+      : monthAnchor;
 
   useEffect(() => {
     const sequence = requestSequence.current + 1;
@@ -117,6 +153,49 @@ export default function AnalyticsReport() {
         : item.department
     }))
   ), [business, report]);
+
+  const departmentTimeline = useMemo(() => {
+    const rows = report?.byDateDepartment || [];
+    const seriesMap = new Map();
+    rows.forEach((item) => {
+      const identity = `${item.business}\u0000${item.department}`;
+      if (!seriesMap.has(identity)) {
+        seriesMap.set(identity, {
+          identity,
+          label: business === 'all'
+            ? `${item.business} · ${item.department}`
+            : item.department
+        });
+      }
+    });
+
+    const series = [...seriesMap.values()].map((item, index) => ({
+      ...item,
+      key: `series${index}`,
+      color: CHART_COLORS[index % CHART_COLORS.length]
+    }));
+    const keyByIdentity = new Map(series.map((item) => [item.identity, item.key]));
+    const pointsByDate = new Map();
+
+    rows.forEach((item) => {
+      const point = pointsByDate.get(item.date) || {};
+      const seriesKey = keyByIdentity.get(`${item.business}\u0000${item.department}`);
+      if (seriesKey) point[seriesKey] = item.hours;
+      pointsByDate.set(item.date, point);
+    });
+
+    const points = report?.range
+      ? datesBetween(report.range.startDate, report.range.endDate).map((date) => {
+        const point = { date, label: shortDate(date), ...(pointsByDate.get(date) || {}) };
+        series.forEach((item) => {
+          if (point[item.key] === undefined) point[item.key] = 0;
+        });
+        return point;
+      })
+      : [];
+
+    return { points, rows, series };
+  }, [business, report]);
 
   const employeeRows = useMemo(() => {
     const rows = report?.byEmployee || [];
@@ -192,11 +271,20 @@ export default function AnalyticsReport() {
           <BarChart3 size={20} /> Stunden-Auswertung
         </h3>
         <p className="mt-1 text-xs text-emerald-800">
-          Wochen- oder Monatsbericht direkt aus den gespeicherten Schichten.
+          Tages-, Wochen- oder Monatsbericht direkt aus den gespeicherten Schichten.
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 rounded-xl bg-white p-1 shadow-sm">
+      <div className="grid grid-cols-3 gap-2 rounded-xl bg-white p-1 shadow-sm">
+        <button
+          type="button"
+          onClick={() => setPeriod('day')}
+          className={`rounded-lg px-3 py-2 text-sm font-bold transition ${
+            period === 'day' ? 'bg-emerald-700 text-white' : 'text-neutral-600 hover:bg-neutral-100'
+          }`}
+        >
+          Tag
+        </button>
         <button
           type="button"
           onClick={() => setPeriod('week')}
@@ -219,15 +307,15 @@ export default function AnalyticsReport() {
 
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm font-semibold text-neutral-800">
-          {period === 'week' ? 'Datum in der Woche' : 'Monat'}
+          {period === 'day' ? 'Tag' : period === 'week' ? 'Datum in der Woche' : 'Monat'}
           <input
-            type={period === 'week' ? 'date' : 'month'}
+            type={period === 'month' ? 'month' : 'date'}
             value={anchor}
-            onChange={(event) => (
-              period === 'week'
-                ? setWeekAnchor(event.target.value)
-                : setMonthAnchor(event.target.value)
-            )}
+            onChange={(event) => {
+              if (period === 'day') setDayAnchor(event.target.value);
+              else if (period === 'week') setWeekAnchor(event.target.value);
+              else setMonthAnchor(event.target.value);
+            }}
             className="mt-1 w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-base"
           />
         </label>
@@ -270,7 +358,7 @@ export default function AnalyticsReport() {
           <div ref={exportRef} className="space-y-4 rounded-2xl bg-white p-4 shadow-sm">
             <div className="text-center">
               <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                {period === 'week' ? 'Wochenbericht' : 'Monatsbericht'}
+                {period === 'day' ? 'Tagesbericht' : period === 'week' ? 'Wochenbericht' : 'Monatsbericht'}
               </p>
               <h4 className="mt-1 text-lg font-bold text-neutral-900">{report.range.label}</h4>
               <p className="mt-1 text-xs text-neutral-500">
@@ -334,6 +422,105 @@ export default function AnalyticsReport() {
               <p className="rounded-xl bg-neutral-50 py-8 text-center text-sm text-neutral-500">
                 Für diesen Zeitraum wurden keine Schichten gefunden.
               </p>
+            )}
+
+            {departmentTimeline.rows.length > 0 && (
+              <div className="space-y-4 border-t border-neutral-200 pt-4">
+                <div>
+                  <h5 className="text-sm font-bold text-neutral-800">Abteilungsverlauf</h5>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    {department || 'Alle Abteilungen'} · Stunden pro Tag
+                  </p>
+                </div>
+
+                <div
+                  className="h-72 w-full"
+                  role="img"
+                  aria-label="Liniendiagramm der Arbeitsstunden nach Datum und Abteilung"
+                >
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={departmentTimeline.points} margin={{ top: 8, right: 10, left: -18, bottom: 2 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                      <XAxis
+                        dataKey="label"
+                        tick={{ fontSize: 11 }}
+                        interval={period === 'month' ? 3 : 0}
+                        minTickGap={8}
+                      />
+                      <YAxis tick={{ fontSize: 11 }} width={44} allowDecimals />
+                      <Tooltip
+                        formatter={(value, name) => [`${formatHours(value)} Std.`, name]}
+                        labelFormatter={(label) => `Datum: ${label}`}
+                        contentStyle={{ borderRadius: 12, borderColor: '#d4d4d4' }}
+                      />
+                      {departmentTimeline.series.map((item) => (
+                        <Line
+                          key={item.identity}
+                          type="monotone"
+                          dataKey={item.key}
+                          name={item.label}
+                          stroke={item.color}
+                          strokeWidth={2.5}
+                          dot={{ r: period === 'month' ? 2 : 4 }}
+                          activeDot={{ r: 6 }}
+                          connectNulls
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="flex flex-wrap gap-x-4 gap-y-2">
+                  {departmentTimeline.series.map((item) => (
+                    <span key={item.identity} className="flex items-center gap-2 text-xs text-neutral-700">
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                      {item.label}
+                    </span>
+                  ))}
+                </div>
+
+                <div className="max-h-96 overflow-auto rounded-xl border border-neutral-200">
+                  <table className="w-full min-w-[620px] border-collapse text-left text-xs">
+                    <thead className="sticky top-0 bg-neutral-100">
+                      <tr className="border-b border-neutral-300 text-neutral-600">
+                        <th className="px-3 py-2">Datum</th>
+                        <th className="px-3 py-2">Betrieb</th>
+                        <th className="px-3 py-2">Abteilung</th>
+                        <th className="px-3 py-2 text-right">Schichten</th>
+                        <th className="px-3 py-2 text-right">Personen</th>
+                        <th className="px-3 py-2 text-right">Stunden</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {departmentTimeline.rows.map((item) => (
+                        <tr
+                          key={`${item.date}-${item.business}-${item.department}`}
+                          className="border-b border-neutral-100 last:border-0"
+                        >
+                          <td className="whitespace-nowrap px-3 py-2 font-semibold text-neutral-800">
+                            {shortDate(item.date)}
+                          </td>
+                          <td className="px-3 py-2 text-neutral-600">{item.business}</td>
+                          <td className="px-3 py-2 text-neutral-600">{item.department}</td>
+                          <td className="px-3 py-2 text-right text-neutral-700">{item.shiftCount}</td>
+                          <td className="px-3 py-2 text-right text-neutral-700">{item.employeeCount}</td>
+                          <td className="px-3 py-2 text-right font-bold text-neutral-900">
+                            {formatHours(item.hours)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="sticky bottom-0 border-t border-neutral-300 bg-neutral-100">
+                      <tr>
+                        <td colSpan={5} className="px-3 py-2 font-bold text-neutral-800">Gesamt</td>
+                        <td className="px-3 py-2 text-right font-bold text-neutral-900">
+                          {formatHours(totalHours)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
             )}
 
             {employeeRows.length > 0 && (
@@ -420,6 +607,8 @@ export default function AnalyticsReport() {
           </div>
         </>
       ) : null}
+
+      <MonthlyWeekdayComparison business={business} department={department} />
 
       {error && <p className="rounded-xl bg-red-100 px-3 py-2 text-sm text-red-800">Fehler: {error}</p>}
     </section>

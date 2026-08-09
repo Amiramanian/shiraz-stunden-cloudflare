@@ -12,7 +12,8 @@ export const SHIRAZ_BASE_STAFF: Record<string, string[]> = {
   Fahrer: [
     'Yusef', 'Erfan', 'Malik Lugman', 'Malik Tanwir', 'Vahid',
     'Kazem', 'Amir2', 'Masoud', 'Amir'
-  ]
+  ],
+  IT: ['Amir2']
 };
 
 export const DJADOO_PERSONAL_STAFF = [
@@ -23,7 +24,7 @@ export const DJADOO_PERSONAL_STAFF = [
 
 export const HINWEIS_ONLY_STAFF = ['Fr Bobrik'];
 
-const SHIRAZ_DEPARTMENT_ORDER = ['Bar', 'Küche', 'Service', 'Fahrer', 'Catering', 'Technik'];
+const SHIRAZ_DEPARTMENT_ORDER = ['Bar', 'Küche', 'Service', 'Fahrer', 'IT', 'Catering', 'Technik'];
 const DJADOO_DEPARTMENT_ORDER = ['Personal'];
 
 const KNOWN_SCAN_NAME_ALIASES: Record<string, string> = {
@@ -53,6 +54,7 @@ const SCAN_SECTION_HEADINGS = new Set([
   'betriebsleiter',
   'leitung',
   'technik',
+  'it',
   'personal',
   'catering',
   'vorschuss',

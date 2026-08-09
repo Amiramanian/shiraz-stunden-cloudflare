@@ -15,7 +15,8 @@ export const SHIRAZ_BASE_STAFF = {
   Fahrer: [
     'Yusef', 'Erfan', 'Malik Lugman', 'Malik Tanwir', 'Vahid',
     'Kazem', 'Amir2', 'Masoud', 'Amir'
-  ]
+  ],
+  IT: ['Amir2']
 };
 
 export const DJADOO_PERSONAL_STAFF = [
@@ -24,7 +25,7 @@ export const DJADOO_PERSONAL_STAFF = [
   'Mr. Mohammadi', 'Dilman', 'Nian', 'Kianoush', 'Aref', 'Nami', 'Mohsen'
 ];
 
-export const SHIRAZ_DEPARTMENT_ORDER = ['Bar', 'Küche', 'Service', 'Fahrer', 'Catering', 'Technik'];
+export const SHIRAZ_DEPARTMENT_ORDER = ['Bar', 'Küche', 'Service', 'Fahrer', 'IT', 'Catering', 'Technik'];
 export const DJADOO_DEPARTMENT_ORDER = ['Personal'];
 
 // People who only get Hinweise (notes) — not part of any business/department, no shifts.

@@ -1,6 +1,6 @@
 import type { Env } from './types';
 
-export type AnalyticsPeriod = 'week' | 'month';
+export type AnalyticsPeriod = 'day' | 'week' | 'month';
 
 export interface AnalyticsRange {
   period: AnalyticsPeriod;
@@ -46,11 +46,22 @@ function parseIsoDate(value: string): Date {
 
 export function resolveAnalyticsRange(periodValue: unknown, anchorValue: unknown): AnalyticsRange {
   const period = String(periodValue || '').trim() as AnalyticsPeriod;
-  if (period !== 'week' && period !== 'month') {
-    throw new Error('Zeitraum muss Woche oder Monat sein.');
+  if (period !== 'day' && period !== 'week' && period !== 'month') {
+    throw new Error('Zeitraum muss Tag, Woche oder Monat sein.');
   }
 
   const anchor = String(anchorValue || '').trim();
+  if (period === 'day') {
+    parseIsoDate(anchor);
+    return {
+      period,
+      anchor,
+      startDate: anchor,
+      endDate: anchor,
+      label: germanDate(anchor)
+    };
+  }
+
   if (period === 'week') {
     const selectedDate = parseIsoDate(anchor);
     const mondayOffset = (selectedDate.getUTCDay() + 6) % 7;
@@ -117,7 +128,7 @@ export async function getReportAnalytics(env: Env, input: AnalyticsFilters) {
   }
   const whereClause = clauses.join(' AND ');
 
-  const [summaryResult, departmentResult, employeeResult, filterResult] = await env.DB.batch([
+  const [summaryResult, departmentResult, employeeResult, dateDepartmentResult, filterResult] = await env.DB.batch([
     env.DB.prepare(`
       SELECT
         ROUND(COALESCE(SUM(duration_hours), 0), 2) AS total_hours,
@@ -150,6 +161,19 @@ export async function getReportAnalytics(env: Env, input: AnalyticsFilters) {
       WHERE ${whereClause}
       GROUP BY business, employee_key
       ORDER BY hours DESC, employee ASC
+    `).bind(...values),
+    env.DB.prepare(`
+      SELECT
+        date,
+        business,
+        department,
+        ROUND(COALESCE(SUM(duration_hours), 0), 2) AS hours,
+        COUNT(*) AS shift_count,
+        COUNT(DISTINCT employee_key) AS employee_count
+      FROM shifts
+      WHERE ${whereClause}
+      GROUP BY date, business, department
+      ORDER BY date ASC, business ASC, department ASC
     `).bind(...values),
     env.DB.prepare(`
       SELECT business, department
@@ -201,6 +225,17 @@ export async function getReportAnalytics(env: Env, input: AnalyticsFilters) {
           .filter(Boolean),
         hours: numberValue(value.hours),
         shiftCount: numberValue(value.shift_count)
+      };
+    }),
+    byDateDepartment: (dateDepartmentResult.results || []).map((row) => {
+      const value = row as Record<string, unknown>;
+      return {
+        date: String(value.date),
+        business: String(value.business),
+        department: String(value.department),
+        hours: numberValue(value.hours),
+        shiftCount: numberValue(value.shift_count),
+        employeeCount: numberValue(value.employee_count)
       };
     })
   };
