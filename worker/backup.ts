@@ -3,6 +3,11 @@ import type { Env } from './types';
 const BACKUP_VERSION = 1;
 const MAX_BACKUP_BYTES = 24 * 1024 * 1024;
 const PAGE_SIZE = 1_000;
+export const BACKUP_RETENTION_DAYS = 30;
+const VERSIONED_BACKUP_PREFIXES = [
+  'backup:snapshots:',
+  'backup:changes:'
+] as const;
 
 const BACKUP_TABLES = [
   { name: 'staff_members', orderBy: 'id', identity: 'id' },
@@ -45,6 +50,11 @@ export interface TableChangeSummary {
   added: number;
   updated: number;
   removed: number;
+}
+
+interface BackupListKey {
+  name: string;
+  metadata?: unknown;
 }
 
 interface TableChanges extends TableChangeSummary {
@@ -101,6 +111,46 @@ export function compareBackupTables(
   }
 
   return changes;
+}
+
+export function shouldDeleteBackupKey(
+  key: BackupListKey,
+  cutoffMs: number,
+  protectedKeys: ReadonlySet<string>
+): boolean {
+  if (protectedKeys.has(key.name)) return false;
+  if (!VERSIONED_BACKUP_PREFIXES.some((prefix) => key.name.startsWith(prefix))) {
+    return false;
+  }
+
+  const metadata = key.metadata as { createdAt?: unknown } | null | undefined;
+  const createdAtMs = Date.parse(String(metadata?.createdAt || ''));
+  return Number.isFinite(createdAtMs) && createdAtMs < cutoffMs;
+}
+
+async function pruneExpiredBackups(
+  env: Env,
+  createdAt: string,
+  protectedKeys: ReadonlySet<string>
+): Promise<number> {
+  const cutoffMs = Date.parse(createdAt)
+    - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1_000;
+  let deletedCount = 0;
+
+  for (const prefix of VERSIONED_BACKUP_PREFIXES) {
+    let cursor: string | undefined;
+    do {
+      const page = await env.BACKUPS.list({ prefix, cursor });
+      const expiredKeys = page.keys.filter((key) =>
+        shouldDeleteBackupKey(key, cutoffMs, protectedKeys)
+      );
+      await Promise.all(expiredKeys.map((key) => env.BACKUPS.delete(key.name)));
+      deletedCount += expiredKeys.length;
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+  }
+
+  return deletedCount;
 }
 
 async function readAllRows(env: Env, table: (typeof BACKUP_TABLES)[number]) {
@@ -217,6 +267,25 @@ export async function runNightlyBackup(
   await env.BACKUPS.put('backup:latest', JSON.stringify(latest), {
     metadata: { kind: 'latest', createdAt, contentHash }
   });
+
+  try {
+    const deletedCount = await pruneExpiredBackups(
+      env,
+      createdAt,
+      new Set([snapshotKey, changesKey])
+    );
+    console.log(JSON.stringify({
+      event: 'backup_retention_complete',
+      retentionDays: BACKUP_RETENTION_DAYS,
+      deletedCount
+    }));
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: 'backup_retention_failed',
+      retentionDays: BACKUP_RETENTION_DAYS,
+      message: error instanceof Error ? error.message : String(error)
+    }));
+  }
 
   console.log(JSON.stringify({
     event: 'nightly_backup_complete',

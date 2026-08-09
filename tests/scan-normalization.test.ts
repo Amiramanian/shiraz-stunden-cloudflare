@@ -19,7 +19,10 @@ import {
   getChangedCorrectionFields,
   isActualScanCorrection
 } from '../worker/scan-corrections.ts';
-import { compareBackupTables } from '../worker/backup.ts';
+import {
+  compareBackupTables,
+  shouldDeleteBackupKey
+} from '../worker/backup.ts';
 import {
   isDateInReportMonth,
   validateMonthlyReportInput
@@ -283,6 +286,31 @@ test('nightly backup comparison detects added, updated, and removed rows', () =>
     updatedIds: ['kept'],
     removedIds: ['removed']
   });
+});
+
+test('nightly backup retention deletes only expired unprotected versioned keys', () => {
+  const cutoffMs = Date.parse('2026-08-01T00:00:00.000Z');
+  const protectedKeys = new Set(['backup:snapshots:protected.json']);
+
+  assert.equal(shouldDeleteBackupKey({
+    name: 'backup:snapshots:old.json',
+    metadata: { createdAt: '2026-07-31T23:59:59.999Z' }
+  }, cutoffMs, protectedKeys), true);
+  assert.equal(shouldDeleteBackupKey({
+    name: 'backup:changes:current.json',
+    metadata: { createdAt: '2026-08-01T00:00:00.000Z' }
+  }, cutoffMs, protectedKeys), false);
+  assert.equal(shouldDeleteBackupKey({
+    name: 'backup:snapshots:protected.json',
+    metadata: { createdAt: '2026-07-01T00:00:00.000Z' }
+  }, cutoffMs, protectedKeys), false);
+  assert.equal(shouldDeleteBackupKey({
+    name: 'backup:latest',
+    metadata: { createdAt: '2026-07-01T00:00:00.000Z' }
+  }, cutoffMs, protectedKeys), false);
+  assert.equal(shouldDeleteBackupKey({
+    name: 'backup:changes:missing-metadata.json'
+  }, cutoffMs, protectedKeys), false);
 });
 
 test('Tech or Technik beside a name overrides the printed section', () => {
