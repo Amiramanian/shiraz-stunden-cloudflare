@@ -2,14 +2,19 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "shiraz-stunden",
   "main": "worker/index.ts",
+  "workers_dev": true,
   "compatibility_date": "2026-07-21",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": true
   },
+  "routes": [
+    { "pattern": "shirazstunden.com", "custom_domain": true },
+    { "pattern": "www.shirazstunden.com", "custom_domain": true }
+  ],
   "secrets": {
     "required": [
       "APP_PIN",
@@ -27,6 +32,14 @@
       "namespace_id": "2026072801",
       "simple": {
         "limit": 5,
+        "period": 60
+      }
+    },
+    {
+      "name": "SCAN_RATE_LIMITER",
+      "namespace_id": "2026080901",
+      "simple": {
+        "limit": 12,
         "period": 60
       }
     }
@@ -56,6 +69,7 @@
     "APP_TIMEZONE": "Europe/Berlin",
     "GOOGLE_SPREADSHEET_ID": "1XmfVLnebQ7NdLV2qh2nJ_qgPQPIQdqkgw178ZfCyyuY",
     "GOOGLE_SHEET_URL": "https://docs.google.com/spreadsheets/d/1XmfVLnebQ7NdLV2qh2nJ_qgPQPIQdqkgw178ZfCyyuY/preview",
+    "GOOGLE_DRIVE_FOLDER_ID": "1wfhFEyGzcvFXpEGE8ZSAePic9-SGbJvL",
     "GEMINI_BASE_URL": "https://generativelanguage.googleapis.com/v1beta",
     "GEMINI_MODEL": "gemini-flash-latest"
   }

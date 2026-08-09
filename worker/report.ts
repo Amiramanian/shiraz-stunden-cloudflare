@@ -17,6 +17,12 @@ import {
   isDateInReportMonth,
   validateMonthlyReportInput
 } from './monthly-report';
+import {
+  completeScheduledExport,
+  releaseScheduledExport,
+  reserveScheduledExport,
+  scheduledExportKey
+} from './scheduled-export';
 
 const EXPORT_LOCK_NAME = 'google-report';
 const EXPORT_LOCK_SECONDS = 180;
@@ -53,15 +59,43 @@ async function releaseExportLock(env: Env, owner: string): Promise<void> {
   `).bind(EXPORT_LOCK_NAME, owner).run();
 }
 
-export async function exportReport(env: Env, triggerType: 'manual' | 'scheduled') {
+export async function exportReport(
+  env: Env,
+  triggerType: 'manual' | 'scheduled',
+  scheduledTime?: number
+) {
   const runId = crypto.randomUUID();
-  await env.DB.prepare(`
-    INSERT INTO export_runs (id, status, trigger_type, spreadsheet_id)
-    VALUES (?, 'running', ?, ?)
-  `).bind(runId, triggerType, env.GOOGLE_SPREADSHEET_ID || null).run();
+  if (triggerType === 'scheduled' && scheduledTime === undefined) {
+    throw new Error('Scheduled export time is required.');
+  }
+  const reservationKey = triggerType === 'scheduled' && scheduledTime !== undefined
+    ? scheduledExportKey(scheduledTime)
+    : null;
+
+  if (
+    reservationKey &&
+    !await reserveScheduledExport(env.DB, reservationKey, runId)
+  ) {
+    return {
+      runId: null,
+      skipped: true,
+      reason: 'scheduled-export-already-reserved',
+      scheduledKey: reservationKey
+    };
+  }
+
+  let runRecorded = false;
+  let lockAcquired = false;
 
   try {
+    await env.DB.prepare(`
+      INSERT INTO export_runs (id, status, trigger_type, spreadsheet_id)
+      VALUES (?, 'running', ?, ?)
+    `).bind(runId, triggerType, env.GOOGLE_SPREADSHEET_ID || null).run();
+    runRecorded = true;
+
     await acquireExportLock(env, runId);
+    lockAcquired = true;
     const [shifts, hinweise, staff] = await Promise.all([
       listShifts(env),
       listHinweise(env),
@@ -76,23 +110,39 @@ export async function exportReport(env: Env, triggerType: 'manual' | 'scheduled'
       WHERE id = ?
     `).bind(result.spreadsheetId, runId).run();
 
+    if (reservationKey) {
+      await completeScheduledExport(env.DB, reservationKey, runId);
+    }
+
     return { runId, ...result };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await env.DB.prepare(`
-      UPDATE export_runs
-      SET status = 'error', finished_at = datetime('now'), error_message = ?
-      WHERE id = ?
-    `).bind(message.slice(0, 2000), runId).run();
+    const cleanupTasks: Promise<unknown>[] = [];
+
+    if (runRecorded) {
+      cleanupTasks.push(env.DB.prepare(`
+        UPDATE export_runs
+        SET status = 'error', finished_at = datetime('now'), error_message = ?
+        WHERE id = ?
+      `).bind(message.slice(0, 2000), runId).run());
+    }
+
+    if (reservationKey) {
+      cleanupTasks.push(releaseScheduledExport(env.DB, reservationKey, runId));
+    }
+
+    await Promise.allSettled(cleanupTasks);
     throw error;
   } finally {
-    await releaseExportLock(env, runId).catch((error) => {
-      console.error(JSON.stringify({
-        event: 'export_lock_release_failed',
-        runId,
-        message: error instanceof Error ? error.message : String(error)
-      }));
-    });
+    if (lockAcquired) {
+      await releaseExportLock(env, runId).catch((error) => {
+        console.error(JSON.stringify({
+          event: 'export_lock_release_failed',
+          runId,
+          message: error instanceof Error ? error.message : String(error)
+        }));
+      });
+    }
   }
 }
 

@@ -43,6 +43,42 @@ import {
 
 const DEFAULT_JSON_LIMIT = 1_000_000;
 const SCAN_JSON_LIMIT = 25_000_000;
+const PRODUCTION_HOSTS = new Set(['shirazstunden.com', 'www.shirazstunden.com']);
+
+function canonicalRedirect(url: URL): Response | null {
+  if (!PRODUCTION_HOSTS.has(url.hostname)) return null;
+  if (url.protocol === 'https:' && url.hostname === 'shirazstunden.com') return null;
+
+  const canonicalUrl = new URL(url);
+  canonicalUrl.protocol = 'https:';
+  canonicalUrl.hostname = 'shirazstunden.com';
+  canonicalUrl.port = '';
+  return Response.redirect(canonicalUrl.toString(), 308);
+}
+
+function withSecurityHeaders(response: Response, requestUrl: URL): Response {
+  const headers = new Headers(response.headers);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('X-Frame-Options', 'DENY');
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  headers.set(
+    'Permissions-Policy',
+    'camera=(self), microphone=(), geolocation=(), payment=()'
+  );
+  headers.set(
+    'Content-Security-Policy-Report-Only',
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; form-action 'self'"
+  );
+  if (requestUrl.protocol === 'https:' && PRODUCTION_HOSTS.has(requestUrl.hostname)) {
+    headers.set('Strict-Transport-Security', 'max-age=31536000');
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
 
 function json(data: unknown, status = 200, extraHeaders?: HeadersInit) {
   const headers = new Headers(extraHeaders);
@@ -621,6 +657,12 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     }
 
     if (url.pathname === '/api/scan-shifts' && method === 'POST') {
+      const clientKey = request.headers.get('CF-Connecting-IP') || 'local-client';
+      const rateLimit = await env.SCAN_RATE_LIMITER.limit({ key: `scan:${clientKey}` });
+      if (!rateLimit.success) {
+        return json({ error: 'Zu viele Scans. Bitte eine Minute warten.' }, 429);
+      }
+
       const body = await readJson<{
         business?: string;
         todayIso?: string;
@@ -676,15 +718,20 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname.startsWith('/api/')) return handleApi(request, env, ctx);
-    return env.ASSETS.fetch(request);
+    const redirect = canonicalRedirect(url);
+    if (redirect) return withSecurityHeaders(redirect, url);
+
+    const response = url.pathname.startsWith('/api/')
+      ? await handleApi(request, env, ctx)
+      : await env.ASSETS.fetch(request);
+    return withSecurityHeaders(response, url);
   },
 
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil((async () => {
       const tasks = [
         ['backup', runNightlyBackup(env, 'scheduled')],
-        ['report_export', exportReport(env, 'scheduled')],
+        ['report_export', exportReport(env, 'scheduled', controller.scheduledTime)],
         ['auth_cleanup', clearExpiredAuthSessions(env)]
       ] as const;
       const results = await Promise.allSettled(tasks.map(([, task]) => task));
