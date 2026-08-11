@@ -569,7 +569,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       }, email);
 
       try {
-        await exportReport(
+        const exportResult = await exportReport(
           env,
           'manual',
           undefined,
@@ -580,8 +580,8 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
           learnedCorrections,
           learnedAliases,
           excelSynced: true,
-          spreadsheetId: env.GOOGLE_SPREADSHEET_ID || null,
-          webViewLink: env.GOOGLE_SHEET_URL || null
+          spreadsheetId: exportResult.spreadsheetId,
+          webViewLink: exportResult.webViewLink
         }, 201);
       } catch (error) {
         const syncError = sanitizeSyncError(error);
@@ -664,6 +664,14 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     }
 
     if (url.pathname === '/api/report/link' && method === 'GET') {
+      const [latestMonthlyReport] = await listMonthlyReports(env);
+      if (latestMonthlyReport) {
+        return json({
+          spreadsheetId: latestMonthlyReport.spreadsheetId,
+          webViewLink: latestMonthlyReport.webViewLink,
+          reportMonth: latestMonthlyReport.reportMonth
+        });
+      }
       const spreadsheetId = env.GOOGLE_SPREADSHEET_ID;
       const webViewLink = env.GOOGLE_SHEET_URL || (
         spreadsheetId && !spreadsheetId.startsWith('REPLACE_')

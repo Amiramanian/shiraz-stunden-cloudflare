@@ -343,6 +343,38 @@ interface SheetMetadata {
   }>;
 }
 
+type SheetGridMetadata = Pick<SheetMetadata['sheets'][number], 'properties'>;
+
+function a1ColumnName(columnCount: number): string {
+  let value = Math.max(1, Math.floor(columnCount));
+  let name = '';
+  while (value > 0) {
+    value -= 1;
+    name = String.fromCharCode(65 + (value % 26)) + name;
+    value = Math.floor(value / 26);
+  }
+  return name;
+}
+
+export function buildSheetClearRanges(
+  plans: Array<Pick<SheetPlan, 'title'>>,
+  sheets: SheetGridMetadata[]
+): string[] {
+  const sheetByTitle = new Map(
+    sheets.map((sheet) => [sheet.properties.title, sheet.properties])
+  );
+
+  return plans.map((plan) => {
+    const properties = sheetByTitle.get(plan.title);
+    if (!properties) {
+      throw new Error(`Google Sheet tab was not created: ${plan.title}`);
+    }
+    const rowCount = Math.max(properties.gridProperties?.rowCount || 1, 1);
+    const columnCount = Math.max(properties.gridProperties?.columnCount || 1, 1);
+    return `${escapeSheetTitle(plan.title)}!A1:${a1ColumnName(columnCount)}${rowCount}`;
+  });
+}
+
 // Color definitions for formatting
 const COLORS = {
   black: { red: 0, green: 0, blue: 0 },
@@ -820,7 +852,7 @@ export async function updateGoogleSpreadsheet(
   );
 
   // Clear all data in target sheets
-  const clearRanges = plans.map((plan) => escapeSheetTitle(plan.title));
+  const clearRanges = buildSheetClearRanges(plans, metadata.sheets);
   await googleFetch(
     env,
     `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchClear`,

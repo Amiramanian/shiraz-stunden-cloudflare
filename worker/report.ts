@@ -42,6 +42,16 @@ async function updateExistingMonthlyReports(
     ? reports.filter((report) => requested.has(report.reportMonth))
     : reports;
 
+  if (requested) {
+    const availableMonths = new Set(selectedReports.map((report) => report.reportMonth));
+    const missingMonths = [...requested].filter((month) => !availableMonths.has(month));
+    if (missingMonths.length > 0) {
+      throw new Error(
+        `Keine Monatsdatei für ${missingMonths.join(', ')} vorhanden. Bitte zuerst die Monatsdatei erstellen.`
+      );
+    }
+  }
+
   if (selectedReports.length === 0) return [];
   if (!isMonthlyGoogleDriveConfigured(env)) {
     throw new Error('Existing monthly files cannot be updated because Google Drive OAuth is not connected.');
@@ -66,6 +76,7 @@ async function updateExistingMonthlyReports(
     updated.push({
       reportMonth: report.reportMonth,
       spreadsheetId: report.spreadsheetId,
+      webViewLink: report.webViewLink,
       updatedSheets: Number(result.updatedSheets || plans.length),
       shiftCount: monthlyShifts.length,
       hinweisCount: monthlyHinweise.length
@@ -138,7 +149,7 @@ export async function exportReport(
     await env.DB.prepare(`
       INSERT INTO export_runs (id, status, trigger_type, spreadsheet_id)
       VALUES (?, 'running', ?, ?)
-    `).bind(runId, triggerType, env.GOOGLE_SPREADSHEET_ID || null).run();
+    `).bind(runId, triggerType, null).run();
     runRecorded = true;
 
     await acquireExportLock(env, runId);
@@ -148,8 +159,6 @@ export async function exportReport(
       listHinweise(env),
       listStaff(env)
     ]);
-    const plans = buildSheetPlans(shifts, hinweise, staff);
-    const result = await updateGoogleSpreadsheet(env, plans);
     const updatedMonthlyReports = await updateExistingMonthlyReports(
       env,
       shifts,
@@ -157,18 +166,25 @@ export async function exportReport(
       staff,
       monthlyReportMonths
     );
+    const primaryMonthlyReport = updatedMonthlyReports[0] || null;
 
     await env.DB.prepare(`
       UPDATE export_runs
       SET status = 'success', finished_at = datetime('now'), spreadsheet_id = ?
       WHERE id = ?
-    `).bind(result.spreadsheetId, runId).run();
+    `).bind(primaryMonthlyReport?.spreadsheetId || null, runId).run();
 
     if (reservationKey) {
       await completeScheduledExport(env.DB, reservationKey, runId);
     }
 
-    return { runId, ...result, updatedMonthlyReports };
+    return {
+      runId,
+      spreadsheetId: primaryMonthlyReport?.spreadsheetId || null,
+      webViewLink: primaryMonthlyReport?.webViewLink || null,
+      mainSpreadsheetUpdated: false,
+      updatedMonthlyReports
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const cleanupTasks: Promise<unknown>[] = [];

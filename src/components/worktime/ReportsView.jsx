@@ -91,9 +91,7 @@ export default function ReportsView({ onBack }) {
     try {
       const response = await base44.functions.invoke('exportToGoogleDrive', {});
       const monthlyCount = response.data.updatedMonthlyReports?.length || 0;
-      setMessage(
-        `Die Hauptdatei und ${monthlyCount} Monatsdatei(en) wurden aktualisiert.`
-      );
+      setMessage(`${monthlyCount} Monatsdatei(en) wurden aktualisiert.`);
       await load();
     } catch (error) {
       const rawMessage = error instanceof Error ? error.message : String(error);
@@ -158,8 +156,8 @@ export default function ReportsView({ onBack }) {
           />
           <StatusRow
             ok={Boolean(status?.googleSheet?.spreadsheetId)}
-            label="Google Sheet: Arbeitszeiten – Shiraz & Djadoo"
-            detail={status?.googleSheet?.spreadsheetId || 'Spreadsheet-ID fehlt'}
+            label="Archivdatei: Arbeitszeiten – Shiraz & Djadoo"
+            detail="Wird nicht mehr automatisch verändert"
           />
           <StatusRow
             ok={Boolean(status?.googleSheet?.serviceAccountConfigured)}
@@ -195,7 +193,7 @@ export default function ReportsView({ onBack }) {
           className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-800 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-blue-700"
         >
           <FileSpreadsheet size={22} />
-          Arbeitszeiten öffnen
+          Aktuelle Monatsdatei öffnen
         </a>
       ) : (
         !loading && <div className="py-5 text-center text-neutral-500">Google Sheet ist noch nicht verbunden.</div>
@@ -203,7 +201,7 @@ export default function ReportsView({ onBack }) {
 
       <button
         onClick={refreshNow}
-        disabled={refreshing || !status?.googleSheet?.serviceAccountConfigured}
+        disabled={refreshing || !status?.googleSheet?.monthlyDriveConfigured}
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 py-3 font-bold text-white transition hover:bg-emerald-600 disabled:opacity-50"
       >
         <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
@@ -306,7 +304,7 @@ export default function ReportsView({ onBack }) {
       {message && <p className="text-center text-sm text-neutral-600">{message}</p>}
 
       <p className="flex items-center justify-center gap-1 text-center text-xs text-neutral-500">
-        <Database size={13} /> Daten werden sofort in D1 gespeichert und direkt mit der Haupt- und Monatsdatei synchronisiert; nachts erfolgt eine weitere Kontrolle.
+        <Database size={13} /> Daten werden sofort in D1 gespeichert und nur mit der passenden Monatsdatei synchronisiert; die Archivdatei bleibt unverändert.
       </p>
 
       <button
