@@ -14,7 +14,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "typecheck": "tsc -p tsconfig.worker.json --noEmit",
     "lint": "eslint . --quiet",
-    "test:scan": "node --test tests/scan-normalization.test.ts tests/time-utils.test.js tests/report-analytics.test.ts tests/scheduled-export.test.ts",
+    "test:scan": "node --test tests/scan-normalization.test.ts tests/time-utils.test.js tests/report-analytics.test.ts tests/scheduled-export.test.ts tests/google-sheets-sync.test.ts",
     "check": "npm run typecheck && npm run lint && npm run test:scan && npm run build && npm audit --audit-level=high && wrangler deploy --dry-run"
   },
   "dependencies": {

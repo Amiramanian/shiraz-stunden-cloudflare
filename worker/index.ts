@@ -27,6 +27,7 @@ import {
   updateStaff
 } from './db';
 import { createMonthlyReport, exportReport } from './report';
+import { reportMonthsForDates } from './monthly-report';
 import { getReportAnalytics } from './report-analytics';
 import { processScanRequest } from './scan-shifts';
 import { normalizePersonName } from './staff-config';
@@ -441,8 +442,16 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       if (duplicate.length) return json({ error: 'Diese Schicht wurde bereits erfasst.' }, 409);
       const created = await createShift(env, input);
       await logAudit(env, 'create', 'shift', created.id, created, email);
-      scheduleReportExport(ctx, env, 'shift_create');
-      return json(created, 201);
+      try {
+        await exportReport(env, 'manual', undefined, reportMonthsForDates(created.date));
+        return json({ ...created, excelSynced: true }, 201);
+      } catch (error) {
+        return json({
+          ...created,
+          excelSynced: false,
+          syncError: sanitizeSyncError(error)
+        }, 201);
+      }
     }
 
     const shiftMatch = url.pathname.match(/^\/api\/shifts\/([^/]+)$/);
@@ -463,7 +472,12 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       await logAudit(env, 'update', 'shift', id, { before: existing, after: updated }, email);
 
       try {
-        await exportReport(env, 'manual');
+        await exportReport(
+          env,
+          'manual',
+          undefined,
+          reportMonthsForDates(existing.date, updated.date)
+        );
         return json({ ...updated, excelSynced: true });
       } catch (error) {
         return json({ ...updated, excelSynced: false, syncError: sanitizeSyncError(error) });
@@ -477,7 +491,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       await logAudit(env, 'delete', 'shift', id, { before: deleted }, email);
 
       try {
-        await exportReport(env, 'manual');
+        await exportReport(env, 'manual', undefined, reportMonthsForDates(deleted.date));
         return json({ deleted: true, record: deleted, excelSynced: true });
       } catch (error) {
         return json({
@@ -555,7 +569,12 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       }, email);
 
       try {
-        await exportReport(env, 'manual');
+        await exportReport(
+          env,
+          'manual',
+          undefined,
+          reportMonthsForDates(...shifts.map((shift) => shift.date))
+        );
         return json({
           ...result,
           learnedCorrections,
@@ -588,8 +607,16 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     if (url.pathname === '/api/hinweise' && method === 'POST') {
       const created = await createHinweis(env, parseHinweis(await readJson(request)));
       await logAudit(env, 'create', 'hinweis', created.id, created, email);
-      scheduleReportExport(ctx, env, 'hinweis_create');
-      return json(created, 201);
+      try {
+        await exportReport(env, 'manual', undefined, reportMonthsForDates(created.date));
+        return json({ ...created, excelSynced: true }, 201);
+      } catch (error) {
+        return json({
+          ...created,
+          excelSynced: false,
+          syncError: sanitizeSyncError(error)
+        }, 201);
+      }
     }
 
     const hinweisMatch = url.pathname.match(/^\/api\/hinweise\/([^/]+)$/);
@@ -605,7 +632,12 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       await logAudit(env, 'update', 'hinweis', id, { before: existing, after: updated }, email);
 
       try {
-        await exportReport(env, 'manual');
+        await exportReport(
+          env,
+          'manual',
+          undefined,
+          reportMonthsForDates(existing.date, updated.date)
+        );
         return json({ ...updated, excelSynced: true });
       } catch (error) {
         return json({ ...updated, excelSynced: false, syncError: sanitizeSyncError(error) });
@@ -619,7 +651,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       await logAudit(env, 'delete', 'hinweis', id, { before: deleted }, email);
 
       try {
-        await exportReport(env, 'manual');
+        await exportReport(env, 'manual', undefined, reportMonthsForDates(deleted.date));
         return json({ deleted: true, record: deleted, excelSynced: true });
       } catch (error) {
         return json({

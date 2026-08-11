@@ -61,8 +61,19 @@ export default function ShiftStep({ business, department, employee, todayIso, on
 
       const hours = calculateDurationHours(normStart, normEnd);
 
-      await onSave({ date, startTime: normStart, endTime: normEnd, durationHours: hours });
-      setStatus({ type: 'success', text: `Gespeichert ✅ Sum: ${hours.toFixed(2)} Stunden` });
+      const result = await onSave({ date, startTime: normStart, endTime: normEnd, durationHours: hours });
+      if (result?.excelSynced === false) {
+        window.alert(
+          'Die Schicht wurde sicher gespeichert, aber Google Sheets konnte noch nicht aktualisiert werden: ' +
+          (result.syncError || 'unbekannter Fehler')
+        );
+      }
+      setStatus({
+        type: result?.excelSynced === false ? 'error' : 'success',
+        text: result?.excelSynced === false
+          ? 'Schicht sicher gespeichert; Google-Synchronisierung wird erneut versucht.'
+          : `Gespeichert ✅ Sum: ${hours.toFixed(2)} Stunden`
+      });
       if (onDone) onDone();
     } catch (e) {
       window.alert('Fehler beim Speichern: ' + e.message);

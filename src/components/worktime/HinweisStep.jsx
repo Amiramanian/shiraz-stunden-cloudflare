@@ -15,15 +15,28 @@ export default function HinweisStep({ employee, todayIso, onSave, onBack, onDone
       return;
     }
     savingRef.current = true;
-    setStatus({ type: 'success', text: 'Hinweis gespeichert ✅' });
+    setSaving(true);
+    setStatus(null);
     try {
-      const savePromise = onSave({ date, text: text.trim() });
+      const result = await onSave({ date, text: text.trim() });
+      if (result?.excelSynced === false) {
+        window.alert(
+          'Der Hinweis wurde sicher gespeichert, aber Google Sheets konnte noch nicht aktualisiert werden: ' +
+          (result.syncError || 'unbekannter Fehler')
+        );
+      }
+      setStatus({
+        type: result?.excelSynced === false ? 'error' : 'success',
+        text: result?.excelSynced === false
+          ? 'Hinweis sicher gespeichert; Google-Synchronisierung wird erneut versucht.'
+          : 'Hinweis gespeichert ✅'
+      });
       if (onDone) onDone();
-      await savePromise;
     } catch (e) {
       window.alert('Fehler beim Speichern: ' + e.message);
     } finally {
       savingRef.current = false;
+      setSaving(false);
     }
   }
 

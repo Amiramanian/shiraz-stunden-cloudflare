@@ -157,7 +157,7 @@ export default function Home() {
       );
     }
 
-    await base44.entities.Shift.create({
+    return base44.entities.Shift.create({
       business: selectedBusiness,
       department: selectedDepartment,
       employee: selectedEmployee,
@@ -220,7 +220,7 @@ export default function Home() {
   }
 
   async function handleSaveHinweis({ date, text }) {
-    await base44.entities.Hinweis.create({
+    return base44.entities.Hinweis.create({
       employee: selectedHinweisEmployee,
       employeeKey: normalizePersonName(selectedHinweisEmployee),
       date,

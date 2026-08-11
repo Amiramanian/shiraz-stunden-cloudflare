@@ -18,3 +18,11 @@ export function validateMonthlyReportInput(monthValue: unknown, nameValue: unkno
 export function isDateInReportMonth(date: string, month: string): boolean {
   return date.startsWith(`${month}-`);
 }
+
+export function reportMonthsForDates(...dates: string[]): string[] {
+  return [...new Set(
+    dates
+      .map((date) => date.slice(0, 7))
+      .filter((month) => /^\d{4}-(0[1-9]|1[0-2])$/.test(month))
+  )];
+}

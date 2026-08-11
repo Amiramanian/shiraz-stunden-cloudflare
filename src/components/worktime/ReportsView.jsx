@@ -89,8 +89,11 @@ export default function ReportsView({ onBack }) {
     setRefreshing(true);
     setMessage('');
     try {
-      await base44.functions.invoke('exportToGoogleDrive', {});
-      setMessage('Die Datei „Arbeitszeiten – Shiraz & Djadoo“ wurde aktualisiert.');
+      const response = await base44.functions.invoke('exportToGoogleDrive', {});
+      const monthlyCount = response.data.updatedMonthlyReports?.length || 0;
+      setMessage(
+        `Die Hauptdatei und ${monthlyCount} Monatsdatei(en) wurden aktualisiert.`
+      );
       await load();
     } catch (error) {
       const rawMessage = error instanceof Error ? error.message : String(error);
@@ -303,7 +306,7 @@ export default function ReportsView({ onBack }) {
       {message && <p className="text-center text-sm text-neutral-600">{message}</p>}
 
       <p className="flex items-center justify-center gap-1 text-center text-xs text-neutral-500">
-        <Database size={13} /> Daten werden sofort in D1 gespeichert; die Datei wird jede Nacht aktualisiert.
+        <Database size={13} /> Daten werden sofort in D1 gespeichert und direkt mit der Haupt- und Monatsdatei synchronisiert; nachts erfolgt eine weitere Kontrolle.
       </p>
 
       <button

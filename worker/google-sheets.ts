@@ -23,6 +23,29 @@ export interface CreatedMonthlySpreadsheet {
   removedSheets: string[];
 }
 
+export function buildMissingSheetRequests(
+  plans: SheetPlan[],
+  existingTitles: ReadonlySet<string>
+): Array<Record<string, unknown>> {
+  return plans
+    .filter((plan) => !existingTitles.has(plan.title))
+    .map((plan) => ({
+      addSheet: {
+        properties: {
+          title: plan.title,
+          hidden: Boolean(plan.hidden),
+          gridProperties: {
+            rowCount: Math.max(plan.values.length + 20, 100),
+            columnCount: Math.max(
+              ...plan.values.map((row) => row.length),
+              2
+            )
+          }
+        }
+      }
+    }));
+}
+
 interface GoogleValueRange {
   range?: string;
   values?: Array<Array<string | number | boolean>>;
@@ -768,24 +791,7 @@ export async function updateGoogleSpreadsheet(
   );
 
   // Create requests for missing sheets
-  const addRequests = plans
-    .filter((plan) => !existingTitles.has(plan.title))
-    .map((plan) => ({
-      addSheet: {
-        properties: {
-          title: plan.title,
-          hidden: Boolean(plan.hidden),
-          gridProperties: {
-            rowCount: Math.max(plan.values.length + 20, 100),
-            columnCount: Math.max(
-              ...plan.values.map((row) => row.length),
-              2
-            )
-          }
-        }
-      },
-      authMode
-    }));
+  const addRequests = buildMissingSheetRequests(plans, existingTitles);
 
   // Create missing sheets
   if (addRequests.length) {
@@ -795,7 +801,8 @@ export async function updateGoogleSpreadsheet(
       {
         method: 'POST',
         body: JSON.stringify({ requests: addRequests })
-      }
+      },
+      authMode
     );
 
     // Refresh metadata to get new sheet IDs

@@ -3,6 +3,7 @@ import {
   createMonthlyReportRecord,
   getMonthlyReportByMonth,
   listHinweise,
+  listMonthlyReports,
   listShifts,
   listStaff
 } from './db';
@@ -27,6 +28,51 @@ import {
 const EXPORT_LOCK_NAME = 'google-report';
 const EXPORT_LOCK_SECONDS = 180;
 const EXPORT_LOCK_ATTEMPTS = 30;
+
+async function updateExistingMonthlyReports(
+  env: Env,
+  shifts: Awaited<ReturnType<typeof listShifts>>,
+  hinweise: Awaited<ReturnType<typeof listHinweise>>,
+  staff: Awaited<ReturnType<typeof listStaff>>,
+  requestedMonths?: string[]
+) {
+  const reports = await listMonthlyReports(env);
+  const requested = requestedMonths ? new Set(requestedMonths) : null;
+  const selectedReports = requested
+    ? reports.filter((report) => requested.has(report.reportMonth))
+    : reports;
+
+  if (selectedReports.length === 0) return [];
+  if (!isMonthlyGoogleDriveConfigured(env)) {
+    throw new Error('Existing monthly files cannot be updated because Google Drive OAuth is not connected.');
+  }
+
+  const updated = [];
+  for (const report of selectedReports) {
+    const monthlyShifts = shifts.filter((shift) =>
+      isDateInReportMonth(shift.date, report.reportMonth)
+    );
+    const monthlyHinweise = hinweise.filter((note) =>
+      isDateInReportMonth(note.date, report.reportMonth)
+    );
+    const plans = buildSheetPlans(monthlyShifts, monthlyHinweise, staff);
+    const result = await updateGoogleSpreadsheet(env, plans, {
+      spreadsheetId: report.spreadsheetId,
+      authMode: 'user',
+      webViewLink: report.webViewLink,
+      cleanObsoleteManagedSheets: false,
+      protectionEditorEmail: null
+    });
+    updated.push({
+      reportMonth: report.reportMonth,
+      spreadsheetId: report.spreadsheetId,
+      updatedSheets: Number(result.updatedSheets || plans.length),
+      shiftCount: monthlyShifts.length,
+      hinweisCount: monthlyHinweise.length
+    });
+  }
+  return updated;
+}
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -62,7 +108,8 @@ async function releaseExportLock(env: Env, owner: string): Promise<void> {
 export async function exportReport(
   env: Env,
   triggerType: 'manual' | 'scheduled',
-  scheduledTime?: number
+  scheduledTime?: number,
+  monthlyReportMonths?: string[]
 ) {
   const runId = crypto.randomUUID();
   if (triggerType === 'scheduled' && scheduledTime === undefined) {
@@ -103,6 +150,13 @@ export async function exportReport(
     ]);
     const plans = buildSheetPlans(shifts, hinweise, staff);
     const result = await updateGoogleSpreadsheet(env, plans);
+    const updatedMonthlyReports = await updateExistingMonthlyReports(
+      env,
+      shifts,
+      hinweise,
+      staff,
+      monthlyReportMonths
+    );
 
     await env.DB.prepare(`
       UPDATE export_runs
@@ -114,7 +168,7 @@ export async function exportReport(
       await completeScheduledExport(env.DB, reservationKey, runId);
     }
 
-    return { runId, ...result };
+    return { runId, ...result, updatedMonthlyReports };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const cleanupTasks: Promise<unknown>[] = [];
