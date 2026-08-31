@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildMissingSheetRequests,
-  buildSheetClearRanges
+  buildSheetCapacityRequests,
+  buildStaleSheetClearRanges
 } from '../worker/google-sheets.ts';
 import { reportMonthsForDates } from '../worker/monthly-report.ts';
 
@@ -34,10 +35,13 @@ test('affected monthly files are deduplicated from shift and note dates', () => 
   );
 });
 
-test('sheet clearing covers the complete allocated grid including stale tail rows', () => {
+test('sheet clearing touches only stale rows and columns after replacement data', () => {
   assert.deepEqual(
-    buildSheetClearRanges(
-      [{ title: 'Bearbeiten_Schichten' }, { title: "Chef's view" }],
+    buildStaleSheetClearRanges(
+      [
+        { title: 'Bearbeiten_Schichten', values: Array.from({ length: 10 }, () => Array(8).fill('x')) },
+        { title: "Chef's view", values: Array.from({ length: 20 }, () => ['x', 'y']) }
+      ],
       [
         {
           properties: {
@@ -55,6 +59,48 @@ test('sheet clearing covers the complete allocated grid including stale tail row
         }
       ]
     ),
-    ["'Bearbeiten_Schichten'!A1:H1000", "'Chef''s view'!A1:AB120"]
+    [
+      "'Bearbeiten_Schichten'!A11:H1000",
+      "'Chef''s view'!A21:AB120",
+      "'Chef''s view'!C1:AB20"
+    ]
+  );
+});
+
+test('sheet capacity expands without shrinking the last good export', () => {
+  assert.deepEqual(
+    buildSheetCapacityRequests(
+      [{ title: 'Schichten', values: Array.from({ length: 120 }, () => Array(10).fill('x')) }],
+      [{
+        properties: {
+          sheetId: 42,
+          title: 'Schichten',
+          gridProperties: { rowCount: 100, columnCount: 8 }
+        }
+      }]
+    ),
+    [{
+      updateSheetProperties: {
+        properties: {
+          sheetId: 42,
+          gridProperties: { rowCount: 120, columnCount: 10 }
+        },
+        fields: 'gridProperties(rowCount,columnCount)'
+      }
+    }]
+  );
+
+  assert.deepEqual(
+    buildSheetCapacityRequests(
+      [{ title: 'Schichten', values: [['new']] }],
+      [{
+        properties: {
+          sheetId: 42,
+          title: 'Schichten',
+          gridProperties: { rowCount: 100, columnCount: 8 }
+        }
+      }]
+    ),
+    []
   );
 });

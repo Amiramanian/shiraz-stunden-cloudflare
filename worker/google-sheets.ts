@@ -356,23 +356,89 @@ function a1ColumnName(columnCount: number): string {
   return name;
 }
 
-export function buildSheetClearRanges(
-  plans: Array<Pick<SheetPlan, 'title'>>,
+function planColumnCount(plan: Pick<SheetPlan, 'values'>): number {
+  return Math.max(...plan.values.map((row) => row.length), 0);
+}
+
+function rectangularValues(plan: Pick<SheetPlan, 'values'>) {
+  const columnCount = planColumnCount(plan);
+  return plan.values.map((row) =>
+    Array.from({ length: columnCount }, (_, index) => row[index] ?? '')
+  );
+}
+
+export function buildSheetCapacityRequests(
+  plans: Array<Pick<SheetPlan, 'title' | 'values'>>,
+  sheets: SheetGridMetadata[]
+): Array<Record<string, unknown>> {
+  const sheetByTitle = new Map(
+    sheets.map((sheet) => [sheet.properties.title, sheet.properties])
+  );
+
+  const requests: Array<Record<string, unknown>> = [];
+  for (const plan of plans) {
+    const properties = sheetByTitle.get(plan.title);
+    if (!properties) {
+      throw new Error(`Google Sheet tab was not created: ${plan.title}`);
+    }
+    const currentRows = Math.max(properties.gridProperties?.rowCount || 1, 1);
+    const currentColumns = Math.max(properties.gridProperties?.columnCount || 1, 1);
+    const requiredRows = Math.max(plan.values.length, 1);
+    const requiredColumns = Math.max(planColumnCount(plan), 1);
+    const rowCount = Math.max(currentRows, requiredRows);
+    const columnCount = Math.max(currentColumns, requiredColumns);
+    if (rowCount === currentRows && columnCount === currentColumns) continue;
+
+    requests.push({
+      updateSheetProperties: {
+        properties: {
+          sheetId: properties.sheetId,
+          gridProperties: { rowCount, columnCount }
+        },
+        fields: 'gridProperties(rowCount,columnCount)'
+      }
+    });
+  }
+  return requests;
+}
+
+export function buildStaleSheetClearRanges(
+  plans: Array<Pick<SheetPlan, 'title' | 'values'>>,
   sheets: SheetGridMetadata[]
 ): string[] {
   const sheetByTitle = new Map(
     sheets.map((sheet) => [sheet.properties.title, sheet.properties])
   );
+  const ranges: string[] = [];
 
-  return plans.map((plan) => {
+  for (const plan of plans) {
     const properties = sheetByTitle.get(plan.title);
     if (!properties) {
       throw new Error(`Google Sheet tab was not created: ${plan.title}`);
     }
     const rowCount = Math.max(properties.gridProperties?.rowCount || 1, 1);
     const columnCount = Math.max(properties.gridProperties?.columnCount || 1, 1);
-    return `${escapeSheetTitle(plan.title)}!A1:${a1ColumnName(columnCount)}${rowCount}`;
-  });
+    const writtenRows = plan.values.length;
+    const writtenColumns = planColumnCount(plan);
+    const title = escapeSheetTitle(plan.title);
+
+    if (writtenRows === 0 || writtenColumns === 0) {
+      ranges.push(`${title}!A1:${a1ColumnName(columnCount)}${rowCount}`);
+      continue;
+    }
+    if (writtenRows < rowCount) {
+      ranges.push(
+        `${title}!A${writtenRows + 1}:${a1ColumnName(columnCount)}${rowCount}`
+      );
+    }
+    if (writtenColumns < columnCount) {
+      ranges.push(
+        `${title}!${a1ColumnName(writtenColumns + 1)}1:` +
+        `${a1ColumnName(columnCount)}${Math.min(writtenRows, rowCount)}`
+      );
+    }
+  }
+  return ranges;
 }
 
 // Color definitions for formatting
@@ -763,7 +829,8 @@ function buildProtectionRequests(
 
 /**
  * Main export function: Updates Google Spreadsheet with plans
- * Creates missing sheets, clears existing data, writes new data, and applies formatting
+ * Creates missing sheets, writes new data, clears only stale tails, and applies formatting.
+ * Writing first prevents an interrupted request from leaving the workbook blank.
  */
 export async function updateGoogleSpreadsheet(
   env: Env,
@@ -851,19 +918,23 @@ export async function updateGoogleSpreadsheet(
     metadata.sheets.map((sheet) => [sheet.properties.title, sheet.properties.sheetId])
   );
 
-  // Clear all data in target sheets
-  const clearRanges = buildSheetClearRanges(plans, metadata.sheets);
-  await googleFetch(
-    env,
-    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchClear`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ ranges: clearRanges })
-    },
-    authMode
-  );
+  // Expand only when the incoming data is larger. Never shrink before the new
+  // values have been written because that could discard the last good export.
+  const capacityRequests = buildSheetCapacityRequests(plans, metadata.sheets);
+  if (capacityRequests.length) {
+    await googleFetch(
+      env,
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ requests: capacityRequests })
+      },
+      authMode
+    );
+  }
 
-  // Write new data to sheets
+  // Write the complete replacement dataset first. Rows are padded to a
+  // rectangle so stale cells inside the written area are overwritten too.
   await googleFetch(
     env,
     `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`,
@@ -874,12 +945,28 @@ export async function updateGoogleSpreadsheet(
         data: plans.map((plan) => ({
           range: `${escapeSheetTitle(plan.title)}!A1`,
           majorDimension: 'ROWS',
-          values: plan.values
+          values: rectangularValues(plan)
         }))
       })
     },
     authMode
   );
+
+  // After the replacement data is safely present, clear only cells outside its
+  // rectangle. If execution stops here, the new data remains visible and only
+  // harmless stale tail cells may survive until the next export.
+  const staleRanges = buildStaleSheetClearRanges(plans, metadata.sheets);
+  if (staleRanges.length) {
+    await googleFetch(
+      env,
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchClear`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ ranges: staleRanges })
+      },
+      authMode
+    );
+  }
 
   // Build formatting requests for all sheets
   const formattingRequests: Record<string, unknown>[] = [];

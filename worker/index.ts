@@ -260,6 +260,24 @@ function scheduleReportExport(
   }));
 }
 
+function keepReportExportAlive<T>(
+  ctx: ExecutionContext,
+  promise: Promise<T>,
+  reason: string
+): Promise<T> {
+  ctx.waitUntil(promise.then(
+    () => undefined,
+    (error) => {
+      console.error(JSON.stringify({
+        event: 'kept_alive_report_export_failed',
+        reason,
+        message: sanitizeSyncError(error)
+      }));
+    }
+  ));
+  return promise;
+}
+
 function parseStaff(input: Partial<StaffMemberRecord>): Omit<StaffMemberRecord, 'id' | 'hidden'> & { hidden?: boolean } {
   const employee = requireString(input.employee, 'Mitarbeiter');
   return {
@@ -443,7 +461,11 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       const created = await createShift(env, input);
       await logAudit(env, 'create', 'shift', created.id, created, email);
       try {
-        await exportReport(env, 'manual', undefined, reportMonthsForDates(created.date));
+        await keepReportExportAlive(
+          ctx,
+          exportReport(env, 'manual', undefined, reportMonthsForDates(created.date)),
+          'shift_create'
+        );
         return json({ ...created, excelSynced: true }, 201);
       } catch (error) {
         return json({
@@ -472,11 +494,15 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       await logAudit(env, 'update', 'shift', id, { before: existing, after: updated }, email);
 
       try {
-        await exportReport(
-          env,
-          'manual',
-          undefined,
-          reportMonthsForDates(existing.date, updated.date)
+        await keepReportExportAlive(
+          ctx,
+          exportReport(
+            env,
+            'manual',
+            undefined,
+            reportMonthsForDates(existing.date, updated.date)
+          ),
+          'shift_update'
         );
         return json({ ...updated, excelSynced: true });
       } catch (error) {
@@ -491,7 +517,11 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       await logAudit(env, 'delete', 'shift', id, { before: deleted }, email);
 
       try {
-        await exportReport(env, 'manual', undefined, reportMonthsForDates(deleted.date));
+        await keepReportExportAlive(
+          ctx,
+          exportReport(env, 'manual', undefined, reportMonthsForDates(deleted.date)),
+          'shift_delete'
+        );
         return json({ deleted: true, record: deleted, excelSynced: true });
       } catch (error) {
         return json({
@@ -569,11 +599,15 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       }, email);
 
       try {
-        const exportResult = await exportReport(
-          env,
-          'manual',
-          undefined,
-          reportMonthsForDates(...shifts.map((shift) => shift.date))
+        const exportResult = await keepReportExportAlive(
+          ctx,
+          exportReport(
+            env,
+            'manual',
+            undefined,
+            reportMonthsForDates(...shifts.map((shift) => shift.date))
+          ),
+          'shift_bulk_create'
         );
         return json({
           ...result,
@@ -608,7 +642,11 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       const created = await createHinweis(env, parseHinweis(await readJson(request)));
       await logAudit(env, 'create', 'hinweis', created.id, created, email);
       try {
-        await exportReport(env, 'manual', undefined, reportMonthsForDates(created.date));
+        await keepReportExportAlive(
+          ctx,
+          exportReport(env, 'manual', undefined, reportMonthsForDates(created.date)),
+          'hinweis_create'
+        );
         return json({ ...created, excelSynced: true }, 201);
       } catch (error) {
         return json({
@@ -632,11 +670,15 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       await logAudit(env, 'update', 'hinweis', id, { before: existing, after: updated }, email);
 
       try {
-        await exportReport(
-          env,
-          'manual',
-          undefined,
-          reportMonthsForDates(existing.date, updated.date)
+        await keepReportExportAlive(
+          ctx,
+          exportReport(
+            env,
+            'manual',
+            undefined,
+            reportMonthsForDates(existing.date, updated.date)
+          ),
+          'hinweis_update'
         );
         return json({ ...updated, excelSynced: true });
       } catch (error) {
@@ -651,7 +693,11 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
       await logAudit(env, 'delete', 'hinweis', id, { before: deleted }, email);
 
       try {
-        await exportReport(env, 'manual', undefined, reportMonthsForDates(deleted.date));
+        await keepReportExportAlive(
+          ctx,
+          exportReport(env, 'manual', undefined, reportMonthsForDates(deleted.date)),
+          'hinweis_delete'
+        );
         return json({ deleted: true, record: deleted, excelSynced: true });
       } catch (error) {
         return json({
@@ -682,7 +728,11 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
     }
 
     if (url.pathname === '/api/report/export' && method === 'POST') {
-      return json(await exportReport(env, 'manual'));
+      return json(await keepReportExportAlive(
+        ctx,
+        exportReport(env, 'manual'),
+        'manual_export'
+      ));
     }
 
     if (url.pathname === '/api/report/analytics' && method === 'GET') {
