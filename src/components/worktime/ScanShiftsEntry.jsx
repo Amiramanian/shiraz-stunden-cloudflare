@@ -675,8 +675,16 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
       )}
 
       {providerFailures.length > 0 && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-red-800">
-          <p className="mb-2 font-semibold">Details der fehlgeschlagenen KI-Dienste:</p>
+        <div className={`mb-4 rounded-lg border p-4 ${
+          rows.length > 0
+            ? 'border-amber-200 bg-amber-50 text-amber-900'
+            : 'border-red-200 bg-red-50 text-red-800'
+        }`}>
+          <p className="mb-2 font-semibold">
+            {rows.length > 0
+              ? 'Hinweis: Ein KI-Dienst war nicht verfügbar; das Ergebnis stammt aus dem Fallback.'
+              : 'Details der fehlgeschlagenen KI-Dienste:'}
+          </p>
           <ul className="space-y-1 text-sm">
             {providerFailures.map((failure, index) => (
               <li key={`${failure.provider || 'provider'}-${index}`} className="break-words">
