@@ -9,7 +9,8 @@ export type ScanProviderName =
   | 'cloudflare-mistral'
   | 'cloudflare-moondream'
   | 'cloudflare-gemma'
-  | 'gemini';
+  | 'gemini'
+  | 'gemini-review';
 
 export interface ScannedShiftRaw {
   employee: string;
@@ -360,6 +361,7 @@ export function getAvailableScanProviders(env: Env): ScanProviderName[] {
   // deployment. Keep the Cloudflare models as fallbacks when it is
   // unavailable or rate-limited.
   if (env.GEMINI_API_KEY) providers.push('gemini');
+  if (env.GEMINI_API_KEY && env.GEMINI_REVIEW_MODEL) providers.push('gemini-review');
   if (env.AI) {
     providers.push('cloudflare-mistral', 'cloudflare-gemma', 'cloudflare-moondream');
   }
@@ -371,7 +373,7 @@ export async function callScanProvider(
   provider: ScanProviderName,
   context: ScanProviderContext
 ): Promise<ScanProviderOutput> {
-  if (provider !== 'gemini') {
+  if (provider !== 'gemini' && provider !== 'gemini-review') {
     return callWorkersAiProvider(env, provider, context);
   }
 
@@ -386,7 +388,8 @@ export async function callScanProvider(
     parts,
     schema: SHIFT_OUTPUT_SCHEMA,
     maxOutputTokens: 8192,
-    timeoutMs: 45_000
+    timeoutMs: 45_000,
+    model: provider === 'gemini-review' ? env.GEMINI_REVIEW_MODEL : undefined
   });
   return parseProviderPayload(output, provider);
 }

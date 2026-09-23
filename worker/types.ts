@@ -65,6 +65,7 @@ export interface ScannedShift {
     | 'cloudflare-moondream'
     | 'cloudflare-gemma'
     | 'gemini'
+    | 'gemini-review'
     | 'ocr'
     | 'merged'
     | 'manual';

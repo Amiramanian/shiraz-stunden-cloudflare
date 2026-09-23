@@ -547,6 +547,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
     if (source === 'cloudflare-mistral') return 'Cloudflare Mistral';
     if (source === 'cloudflare-moondream') return 'Cloudflare Moondream';
     if (source === 'cloudflare-gemma') return 'Cloudflare Gemma';
+    if (source === 'gemini-review') return 'Gemini Pro review';
     return 'KI';
   }
 

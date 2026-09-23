@@ -71,6 +71,7 @@
     "GOOGLE_SHEET_URL": "https://docs.google.com/spreadsheets/d/1XmfVLnebQ7NdLV2qh2nJ_qgPQPIQdqkgw178ZfCyyuY/preview",
     "GOOGLE_DRIVE_FOLDER_ID": "1wfhFEyGzcvFXpEGE8ZSAePic9-SGbJvL",
     "GEMINI_BASE_URL": "https://generativelanguage.googleapis.com/v1beta",
-    "GEMINI_MODEL": "gemini-flash-latest"
+    "GEMINI_MODEL": "gemini-2.5-flash",
+    "GEMINI_REVIEW_MODEL": "gemini-2.5-pro"
   }
 }
