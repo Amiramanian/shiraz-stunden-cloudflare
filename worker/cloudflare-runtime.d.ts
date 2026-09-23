@@ -12,8 +12,8 @@ interface __BaseEnv_Env {
 	GOOGLE_SHEET_URL: "https://docs.google.com/spreadsheets/d/1XmfVLnebQ7NdLV2qh2nJ_qgPQPIQdqkgw178ZfCyyuY/preview";
 	GOOGLE_DRIVE_FOLDER_ID: "1wfhFEyGzcvFXpEGE8ZSAePic9-SGbJvL";
 	GEMINI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta";
-	GEMINI_MODEL: "gemini-2.5-flash";
-	GEMINI_REVIEW_MODEL: "gemini-2.5-pro";
+	GEMINI_MODEL: "gemini-3.6-flash";
+	GEMINI_REVIEW_MODEL: "gemini-3.1-pro-preview";
 	APP_PIN: string;
 	GOOGLE_CLIENT_EMAIL: string;
 	GOOGLE_PRIVATE_KEY: string;

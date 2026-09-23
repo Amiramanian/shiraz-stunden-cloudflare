@@ -309,7 +309,8 @@ Once a user corrects an employee name during preview, the mapping is learned:
 
 **Cloudflare Variables** (Non-secret, in wrangler.jsonc):
 - `GEMINI_BASE_URL` = `https://generativelanguage.googleapis.com/v1beta`
-- `GEMINI_MODEL` = `gemini-flash-latest`
+- `GEMINI_MODEL` = `gemini-3.6-flash`
+- `GEMINI_REVIEW_MODEL` = `gemini-3.1-pro-preview`
 - `GOOGLE_SPREADSHEET_ID` = Spreadsheet ID
 - `GOOGLE_SHEET_URL` = Spreadsheet URL
 - `APP_TIMEZONE` = `Europe/Berlin` (optional)
