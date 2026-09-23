@@ -437,6 +437,11 @@ export async function processScanRequest(
           candidateQuality = nextQuality;
         }
 
+        // Gemini is the selected high-quality transcriber. An uncertain row
+        // remains visible for a person to review; it must not cause a weaker
+        // fallback to replace the whole sheet with guesses.
+        if (provider === 'gemini') break;
+
         // Do not spend extra inference on a result that is already clear.
         // Ambiguous handwriting gets one or more free fallback verifications.
         const hasAmbiguousRows = normalized.shifts.some(

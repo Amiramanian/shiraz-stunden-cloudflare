@@ -8,15 +8,27 @@ class GeminiHttpError extends Error {
   constructor(
     public readonly status: number,
     public readonly retryable: boolean,
-    detail = ''
+    detail = '',
+    public readonly retryAfterMs?: number
   ) {
     super(`Gemini request failed (${status})${detail ? `: ${detail}` : ''}`);
   }
 }
 
 function isRetryableStatus(status: number): boolean {
-  return status === 408 || status === 409 || status === 425 ||
+  return status === 408 || status === 409 || status === 425 || status === 429 ||
     status >= 500;
+}
+
+function retryAfterMilliseconds(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(Math.round(seconds * 1_000), 30_000);
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return undefined;
+  return Math.min(Math.max(timestamp - Date.now(), 0), 30_000);
 }
 
 async function readBodyLimited(response: Response, maxBytes: number): Promise<string> {
@@ -108,11 +120,11 @@ export async function generateGeminiJson(
 
   const baseUrl = (env.GEMINI_BASE_URL ||
     'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
-  const model = input.model || env.GEMINI_MODEL || 'gemini-3.6-flash';
+  const model = input.model || env.GEMINI_MODEL || 'gemini-3.8-flash';
   const endpoint = `${baseUrl}/models/${encodeURIComponent(model)}:generateContent`;
   let lastError: unknown;
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -152,7 +164,8 @@ export async function generateGeminiJson(
         throw new GeminiHttpError(
           response.status,
           isRetryableStatus(response.status),
-          detail
+          detail,
+          retryAfterMilliseconds(response.headers.get('retry-after'))
         );
       }
 
@@ -177,8 +190,13 @@ export async function generateGeminiJson(
         status: error instanceof GeminiHttpError ? error.status : undefined,
         message: error instanceof Error ? error.message.slice(0, 160) : 'unknown'
       }));
-      if (!retryable || attempt === 2) break;
-      await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+      if (!retryable || attempt === 4) break;
+      const retryAfter = error instanceof GeminiHttpError ? error.retryAfterMs : undefined;
+      // Direct REST calls do not receive the SDK's automatic retry behaviour.
+      // Use the provider delay when supplied, otherwise use bounded
+      // exponential backoff with jitter for transient quota and 5xx errors.
+      const delay = retryAfter ?? ((2 ** (attempt - 1)) * 1_000 + Math.floor(Math.random() * 250));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
