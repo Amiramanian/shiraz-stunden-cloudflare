@@ -94,7 +94,7 @@ function providerDisplayName(provider: ScanProviderName): string {
     'cloudflare-moondream': 'Cloudflare Moondream OCR',
     'cloudflare-gemma': 'Cloudflare Gemma Vision',
     gemini: 'Google Gemini',
-    'gemini-review': 'Google Gemini Pro review'
+    'groq-qwen': 'Groq Qwen Vision'
   };
   return names[provider];
 }

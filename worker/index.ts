@@ -763,18 +763,20 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
 
     if (url.pathname === '/api/scan-shifts/status' && method === 'GET') {
       return json({
-        primaryProvider: 'cloudflare-mistral',
+        primaryProvider: 'gemini',
         providers: {
           cloudflareMistral: Boolean(env.AI),
           cloudflareMoondream: Boolean(env.AI),
           cloudflareGemma: Boolean(env.AI),
-          gemini: Boolean(env.GEMINI_API_KEY)
+          gemini: Boolean(env.GEMINI_API_KEY),
+          groqQwen: Boolean(env.GROQ_API_KEY)
         },
         models: {
           cloudflareMistral: '@cf/mistralai/mistral-small-3.1-24b-instruct',
           cloudflareMoondream: '@cf/moondream/moondream3.1-9B-A2B',
           cloudflareGemma: '@cf/google/gemma-4-26b-a4b-it',
-          gemini: env.GEMINI_MODEL
+          gemini: env.GEMINI_MODEL,
+          groqQwen: env.GROQ_MODEL || 'qwen/qwen3.8-27b'
         }
       });
     }

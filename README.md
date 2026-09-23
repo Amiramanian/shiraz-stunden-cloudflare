@@ -306,11 +306,12 @@ Once a user corrects an employee name during preview, the mapping is learned:
 - `GOOGLE_CLIENT_EMAIL` – Google service account email
 - `GOOGLE_PRIVATE_KEY` – Google service account private key (full PEM format)
 - `GEMINI_API_KEY` – Gemini authentication token
+- `GROQ_API_KEY` – optional Groq token for the Qwen Vision fallback
 
 **Cloudflare Variables** (Non-secret, in wrangler.jsonc):
 - `GEMINI_BASE_URL` = `https://generativelanguage.googleapis.com/v1beta`
 - `GEMINI_MODEL` = `gemini-3.6-flash`
-- `GEMINI_REVIEW_MODEL` = `gemini-3.1-pro-preview`
+- `GROQ_MODEL` = `qwen/qwen3.8-27b`
 - `GOOGLE_SPREADSHEET_ID` = Spreadsheet ID
 - `GOOGLE_SHEET_URL` = Spreadsheet URL
 - `APP_TIMEZONE` = `Europe/Berlin` (optional)
@@ -319,7 +320,7 @@ Once a user corrects an employee name during preview, the mapping is learned:
 
 **Provider status:**
 - Open `/api/scan-shifts/status`
-- The three Cloudflare providers and Gemini are reported independently.
+- Gemini, Groq Qwen Vision, and the three Cloudflare providers are reported independently.
 
 **All providers unavailable:**
 - The app opens a manual preview row instead of losing the scan

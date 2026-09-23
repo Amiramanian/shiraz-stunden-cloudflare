@@ -10,7 +10,10 @@ export type ScanProviderName =
   | 'cloudflare-moondream'
   | 'cloudflare-gemma'
   | 'gemini'
-  | 'gemini-review';
+  | 'groq-qwen';
+
+type WorkersAiProvider = Extract<ScanProviderName,
+  'cloudflare-mistral' | 'cloudflare-moondream' | 'cloudflare-gemma'>;
 
 export interface ScannedShiftRaw {
   employee: string;
@@ -287,7 +290,7 @@ function describeWorkersAiOutput(output: unknown): string {
 
 async function callWorkersAiForImage(
   env: Env,
-  provider: Exclude<ScanProviderName, 'gemini'>,
+  provider: WorkersAiProvider,
   context: ScanProviderContext,
   imageIndex: number
 ): Promise<ScanProviderOutput> {
@@ -343,12 +346,104 @@ async function callWorkersAiForImage(
 
 async function callWorkersAiProvider(
   env: Env,
-  provider: Exclude<ScanProviderName, 'gemini'>,
+  provider: WorkersAiProvider,
   context: ScanProviderContext
 ): Promise<ScanProviderOutput> {
   const combined: ScanProviderOutput = { shifts: [], documentDates: {} };
   for (let imageIndex = 0; imageIndex < context.images.length; imageIndex += 1) {
     const output = await callWorkersAiForImage(env, provider, context, imageIndex);
+    combined.shifts.push(...output.shifts);
+    Object.assign(combined.documentDates, output.documentDates);
+  }
+  return combined;
+}
+
+async function readBodyLimited(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return '';
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let output = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error('Groq response exceeded the allowed size');
+      output += decoder.decode(value, { stream: true });
+    }
+    output += decoder.decode();
+    return output;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function callGroqForImage(
+  env: Env,
+  context: ScanProviderContext,
+  imageIndex: number
+): Promise<ScanProviderOutput> {
+  if (!env.GROQ_API_KEY) throw new Error('Groq API key not configured');
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    signal: AbortSignal.timeout(45_000),
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${env.GROQ_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: env.GROQ_MODEL || 'qwen/qwen3.8-27b',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: buildSingleImagePrompt(context, imageIndex) },
+          { type: 'image_url', image_url: { url: context.images[imageIndex] } }
+        ]
+      }],
+      temperature: 0,
+      max_completion_tokens: 4096,
+      response_format: { type: 'json_object' },
+      reasoning_effort: 'low',
+      reasoning_format: 'hidden'
+    })
+  });
+
+  if (!response.ok) {
+    const errorBody = await readBodyLimited(response, 8 * 1024).catch(() => '');
+    let detail = '';
+    try {
+      detail = String(asRecord(asRecord(JSON.parse(errorBody)).error).message || '')
+        .replace(/\s+/g, ' ')
+        .slice(0, 240);
+    } catch {
+      // The status alone is sufficient when a provider returns non-JSON errors.
+    }
+    throw new Error(`Groq request failed (${response.status})${detail ? `: ${detail}` : ''}`);
+  }
+
+  const body = await readBodyLimited(response, 2 * 1024 * 1024);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    throw new Error('Groq returned invalid response JSON');
+  }
+  const responseText = extractTextValue(payload);
+  if (!responseText) throw new Error('Groq returned an empty response');
+  return parseSingleImagePayload(parseJsonText(responseText, 'groq-qwen'), 'groq-qwen', imageIndex);
+}
+
+async function callGroqProvider(
+  env: Env,
+  context: ScanProviderContext
+): Promise<ScanProviderOutput> {
+  const combined: ScanProviderOutput = { shifts: [], documentDates: {} };
+  for (let imageIndex = 0; imageIndex < context.images.length; imageIndex += 1) {
+    const output = await callGroqForImage(env, context, imageIndex);
     combined.shifts.push(...output.shifts);
     Object.assign(combined.documentDates, output.documentDates);
   }
@@ -361,7 +456,7 @@ export function getAvailableScanProviders(env: Env): ScanProviderName[] {
   // deployment. Keep the Cloudflare models as fallbacks when it is
   // unavailable or rate-limited.
   if (env.GEMINI_API_KEY) providers.push('gemini');
-  if (env.GEMINI_API_KEY && env.GEMINI_REVIEW_MODEL) providers.push('gemini-review');
+  if (env.GROQ_API_KEY) providers.push('groq-qwen');
   if (env.AI) {
     providers.push('cloudflare-mistral', 'cloudflare-gemma', 'cloudflare-moondream');
   }
@@ -373,7 +468,10 @@ export async function callScanProvider(
   provider: ScanProviderName,
   context: ScanProviderContext
 ): Promise<ScanProviderOutput> {
-  if (provider !== 'gemini' && provider !== 'gemini-review') {
+  if (provider === 'groq-qwen') {
+    return callGroqProvider(env, context);
+  }
+  if (provider !== 'gemini') {
     return callWorkersAiProvider(env, provider, context);
   }
 
@@ -388,8 +486,7 @@ export async function callScanProvider(
     parts,
     schema: SHIFT_OUTPUT_SCHEMA,
     maxOutputTokens: 8192,
-    timeoutMs: 45_000,
-    model: provider === 'gemini-review' ? env.GEMINI_REVIEW_MODEL : undefined
+    timeoutMs: 45_000
   });
   return parseProviderPayload(output, provider);
 }

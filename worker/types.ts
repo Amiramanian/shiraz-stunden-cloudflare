@@ -12,6 +12,7 @@ export interface Env extends Cloudflare.Env {
   GOOGLE_OAUTH_CLIENT_SECRET?: string;
   GOOGLE_OAUTH_REFRESH_TOKEN?: string;
   GEMINI_API_KEY: string;
+  GROQ_API_KEY?: string;
 }
 
 export interface ShiftRecord {
@@ -65,7 +66,7 @@ export interface ScannedShift {
     | 'cloudflare-moondream'
     | 'cloudflare-gemma'
     | 'gemini'
-    | 'gemini-review'
+    | 'groq-qwen'
     | 'ocr'
     | 'merged'
     | 'manual';

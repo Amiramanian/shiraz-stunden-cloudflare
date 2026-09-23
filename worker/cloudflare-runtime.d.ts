@@ -13,7 +13,7 @@ interface __BaseEnv_Env {
 	GOOGLE_DRIVE_FOLDER_ID: "1wfhFEyGzcvFXpEGE8ZSAePic9-SGbJvL";
 	GEMINI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta";
 	GEMINI_MODEL: "gemini-3.6-flash";
-	GEMINI_REVIEW_MODEL: "gemini-3.1-pro-preview";
+	GROQ_MODEL: "qwen/qwen3.8-27b";
 	APP_PIN: string;
 	GOOGLE_CLIENT_EMAIL: string;
 	GOOGLE_PRIVATE_KEY: string;
@@ -30,5 +30,5 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "APP_TIMEZONE" | "GOOGLE_SPREADSHEET_ID" | "GOOGLE_SHEET_URL" | "GOOGLE_DRIVE_FOLDER_ID" | "GEMINI_BASE_URL" | "GEMINI_MODEL" | "GEMINI_REVIEW_MODEL" | "APP_PIN" | "GOOGLE_CLIENT_EMAIL" | "GOOGLE_PRIVATE_KEY" | "GEMINI_API_KEY">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "APP_TIMEZONE" | "GOOGLE_SPREADSHEET_ID" | "GOOGLE_SHEET_URL" | "GOOGLE_DRIVE_FOLDER_ID" | "GEMINI_BASE_URL" | "GEMINI_MODEL" | "GROQ_MODEL" | "APP_PIN" | "GOOGLE_CLIENT_EMAIL" | "GOOGLE_PRIVATE_KEY" | "GEMINI_API_KEY">> {}
 }
