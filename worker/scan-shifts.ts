@@ -76,6 +76,17 @@ interface ProviderCandidate extends NormalizedProviderResult {
   rawOutput: ScanProviderOutput;
 }
 
+function providerCandidateQuality(candidate: NormalizedProviderResult): number {
+  if (candidate.shifts.length === 0) return -Infinity;
+  const confidence = candidate.shifts.reduce(
+    (sum, shift) => sum + (Number.isFinite(shift.confidence) ? Number(shift.confidence) : 0.5),
+    0
+  ) / candidate.shifts.length;
+  const mismatchPenalty = candidate.shifts.filter((shift) => shift.hoursMismatch).length * 0.2;
+  const missingDatePenalty = candidate.shifts.filter((shift) => !shift.date).length * 0.1;
+  return confidence - mismatchPenalty - missingDatePenalty;
+}
+
 const MAX_IMAGE_COUNT = 10;
 function providerDisplayName(provider: ScanProviderName): string {
   const names: Record<ScanProviderName, string> = {
@@ -385,6 +396,7 @@ export async function processScanRequest(
     const providerFailures: ProviderFailure[] = [];
     let candidate: ProviderCandidate | null = null;
 
+    let candidateQuality = -Infinity;
     for (const provider of providers) {
       try {
         const rawOutput = await callScanProvider(env, provider, {
@@ -400,7 +412,7 @@ export async function processScanRequest(
           request.todayIso,
           imageNames
         );
-        candidate = {
+        const nextCandidate: ProviderCandidate = {
           ...normalized,
           provider,
           rawOutput
@@ -415,10 +427,26 @@ export async function processScanRequest(
           providerWarnings.push(
             `${providerDisplayName(provider)} erkannte keine sichere Schicht; der nächste Dienst wurde versucht.`
           );
-          candidate = null;
           continue;
         }
-        break;
+
+        const nextQuality = providerCandidateQuality(normalized);
+        if (candidate === null || nextQuality > candidateQuality) {
+          candidate = nextCandidate;
+          candidateQuality = nextQuality;
+        }
+
+        // Do not spend extra inference on a result that is already clear.
+        // Ambiguous handwriting gets one or more free fallback verifications.
+        const hasAmbiguousRows = normalized.shifts.some(
+          (shift) => shift.hoursMismatch || (shift.confidence ?? 0) < 0.78 || !shift.date
+        );
+        if (!hasAmbiguousRows && nextQuality >= 0.78) break;
+        if (hasAmbiguousRows) {
+          providerWarnings.push(
+            `${providerDisplayName(provider)} meldete eine unsichere Zeile; ein weiterer Dienst wird zur Gegenprüfung versucht.`
+          );
+        }
       } catch (error) {
         const failureMessage = error instanceof Error
           ? error.message

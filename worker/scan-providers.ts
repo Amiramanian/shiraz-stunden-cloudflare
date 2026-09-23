@@ -120,7 +120,7 @@ Critical rules:
 4. Ignore crossed-out rows, payment/advance/Überzahlung/Vorschuss notes, totals without a shift, comments, and writing outside the shift tables.
 5. A valid sheet may contain zero shifts. Returning zero is always better than guessing.
 6. Use the printed table section as department. "Liefer" means Fahrer. If Tech or Technik is handwritten beside a person's name, department must be Technik even when the row sits in another section.
-7. Convert times to HH:MM. Midnight written as 00, 0, or 24:00 at the end of an overnight shift becomes 00:00.
+7. Convert times to HH:MM. Midnight written as 00, 0, or 24:00 at the end of an overnight shift becomes 00:00. Read the handwritten S./Summe as a checksum: calculate the overnight duration from start/end and, when a digit is ambiguous (for example 11 versus 14), prefer the reading that matches the written total within about 15 minutes. If no reading is reliable, keep the visible reading, lower confidence, and let the row require review; never invent a time merely to make the total fit.
 8. documentDate is only the date visibly belonging to that image. Convert DD.MM.YY, DD/MM/YY, or DD.MM.YYYY to YYYY-MM-DD. If not visible, use an empty string.
 9. Use a row-specific date only when a separate date is handwritten in that row; otherwise leave it empty. Preserve relative row dates such as gestern or دیروز exactly so they can be resolved against that image's documentDate later.
 10. If one row clearly contains two separate work intervals, return two shifts with the same employee and their respective times.
@@ -130,7 +130,7 @@ Critical rules:
 function staffHint(context: ScanProviderContext): string {
   const directory = String(context.staffDirectoryText || '').trim();
   if (!directory) return '';
-  return `\nRoster hints for matching only (never invent a row from this list):\n${directory}\nKeep numbered names distinct: Amir and Amir2 are different people. Use the printed section and any Tech/Technik marker to choose the department.`;
+  return `\nRoster hints for matching only (never invent a row from this list):\n${directory}\nFirst identify the printed section on the image, then compare the handwritten name only with candidates on that section's line. Do not borrow a name from another department just because it looks similar. If a handwritten Tech/Technik marker is beside the row, use the Technik candidates instead of the printed section. Keep numbered names distinct: Amir and Amir2 are different people. If the section or name is genuinely unreadable, preserve the visible text, lower confidence, and leave the row for review.`;
 }
 
 function buildGeminiPrompts(context: ScanProviderContext) {
@@ -356,10 +356,13 @@ async function callWorkersAiProvider(
 
 export function getAvailableScanProviders(env: Env): ScanProviderName[] {
   const providers: ScanProviderName[] = [];
+  // Gemini is the strongest available document-vision verifier in this
+  // deployment. Keep the Cloudflare models as fallbacks when it is
+  // unavailable or rate-limited.
+  if (env.GEMINI_API_KEY) providers.push('gemini');
   if (env.AI) {
     providers.push('cloudflare-mistral', 'cloudflare-gemma', 'cloudflare-moondream');
   }
-  if (env.GEMINI_API_KEY) providers.push('gemini');
   return providers;
 }
 
