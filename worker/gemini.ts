@@ -120,7 +120,7 @@ export async function generateGeminiJson(
 
   const baseUrl = (env.GEMINI_BASE_URL ||
     'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
-  const model = input.model || env.GEMINI_MODEL || 'gemini-3.8-flash';
+  const model = input.model || env.GEMINI_MODEL || 'gemini-3.6-flash';
   const endpoint = `${baseUrl}/models/${encodeURIComponent(model)}:generateContent`;
   let lastError: unknown;
 

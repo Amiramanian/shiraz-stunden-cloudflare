@@ -387,7 +387,7 @@ export async function createScanHistory(
     scanId,
     business,
     actorEmail,
-    `${env.GEMINI_MODEL || 'gemini-3.8-flash'} + Groq Qwen + Cloudflare Vision chain`,
+    `${env.GEMINI_MODEL || 'gemini-3.6-flash'} + Groq Qwen + Cloudflare Vision chain`,
     imageCount
   ).run();
 }
