@@ -36,6 +36,7 @@ export interface ScanProviderContext {
   imageTexts: string[];
   business: string;
   todayIso: string;
+  staffDirectoryText?: string;
 }
 
 const SHIFT_PROPERTIES = {
@@ -126,6 +127,12 @@ Critical rules:
 11. confidence must reflect legibility. Do not raise confidence because a name seems familiar.
 12. Transcribe the handwritten S./Summe value into writtenHours when present. This is only a cross-check and never creates a shift by itself.`;
 
+function staffHint(context: ScanProviderContext): string {
+  const directory = String(context.staffDirectoryText || '').trim();
+  if (!directory) return '';
+  return `\nRoster hints for matching only (never invent a row from this list):\n${directory}\nKeep numbered names distinct: Amir and Amir2 are different people. Use the printed section and any Tech/Technik marker to choose the department.`;
+}
+
 function buildGeminiPrompts(context: ScanProviderContext) {
   const imageBlocks = context.imageTexts
     .map((text, index) => `--- IMAGE ${index} ---\n${text || '[no transcription available]'}`)
@@ -135,6 +142,7 @@ function buildGeminiPrompts(context: ScanProviderContext) {
     systemPrompt: SYSTEM_PROMPT,
     userPrompt: `Business: ${context.business}
 Reference year context only: ${context.todayIso}
+${staffHint(context)}
 
 The original uploaded images are attached after these optional OCR hint blocks. Inspect the original images directly. OCR hints may contain mistakes and must never override visible handwriting. Extract only rows supported by the original image, keep each row attached to its imageIndex, and return zero shifts when evidence is insufficient.
 
@@ -148,6 +156,7 @@ function buildSingleImagePrompt(context: ScanProviderContext, imageIndex: number
 
 Business: ${context.business}
 Reference year context only: ${context.todayIso}
+${staffHint(context)}
 This request contains exactly one authoritative image.
 Optional local OCR hint (may be wrong and must never override the image):
 ${ocrHint}

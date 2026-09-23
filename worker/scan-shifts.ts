@@ -1,6 +1,6 @@
 import type { Env } from './types';
 // @ts-ignore - shared frontend/backend libs without type declarations
-import { normalizeForMatch, buildFlatStaffList } from '../src/lib/shiftMatching';
+import { normalizeForMatch, buildFlatStaffList, buildStaffDirectoryText } from '../src/lib/shiftMatching';
 // @ts-ignore - shared frontend/backend libs without type declarations
 import { calculateDurationHours, normalizeTimeString } from '../src/lib/timeUtils';
 import {
@@ -372,6 +372,14 @@ export async function processScanRequest(
         .slice(0, 300_000)
     });
 
+    // Load the current server roster before AI analysis. It is supplied only as
+    // a matching hint; rows still require visible handwriting evidence and are
+    // never created from the roster alone.
+    const serverStaff = await listStaff(env);
+    const serverStaffConfig = buildEffectiveStaffConfig(serverStaff);
+    const scopedConfig = { [request.business]: serverStaffConfig[request.business] };
+    const staffDirectoryText = buildStaffDirectoryText(scopedConfig);
+
     const providers = getAvailableScanProviders(env);
     const providerWarnings: string[] = [...imageExtraction.warnings];
     const providerFailures: ProviderFailure[] = [];
@@ -383,7 +391,8 @@ export async function processScanRequest(
           images: request.images,
           imageTexts: imageExtraction.texts,
           business: request.business,
-          todayIso: request.todayIso
+          todayIso: request.todayIso,
+          staffDirectoryText
         });
         const normalized = normalizeProviderShifts(
           rawOutput,
@@ -464,9 +473,6 @@ export async function processScanRequest(
       })
     });
 
-    const serverStaff = await listStaff(env);
-    const serverStaffConfig = buildEffectiveStaffConfig(serverStaff);
-    const scopedConfig = { [request.business]: serverStaffConfig[request.business] };
     const flatStaff = buildFlatStaffList(scopedConfig) as Array<{
       business: string;
       department: string;
