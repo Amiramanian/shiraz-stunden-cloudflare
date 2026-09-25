@@ -26,7 +26,11 @@ import {
   updateShift,
   updateStaff
 } from './db';
-import { createMonthlyReport, exportReport } from './report';
+import {
+  createMonthlyReport,
+  exportReport,
+  highlightExistingMonthlyReportOverpayments
+} from './report';
 import { reportMonthsForDates } from './monthly-report';
 import { getReportAnalytics } from './report-analytics';
 import { processScanRequest } from './scan-shifts';
@@ -733,6 +737,12 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
         exportReport(env, 'manual'),
         'manual_export'
       ));
+    }
+
+    if (url.pathname === '/api/report/highlight-overpayments' && method === 'POST') {
+      return json({
+        reports: await highlightExistingMonthlyReportOverpayments(env)
+      });
     }
 
     if (url.pathname === '/api/report/analytics' && method === 'GET') {

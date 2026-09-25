@@ -4,11 +4,32 @@ import { buildEffectiveStaffConfig, HINWEIS_ONLY_STAFF, normalizePersonName } fr
 export interface SheetPlan {
   title: string;
   values: Array<Array<string | number>>;
+  /** Formatting-only cells that describe an Überzahlung. */
+  overpaymentCells?: Array<{
+    rowIndex: number;
+    columnIndex: number;
+  }>;
   employeeBlocks?: Array<{
     startColumn: number;
     totalRows: number[];
   }>;
   hidden?: boolean;
+}
+
+const OVERPAYMENT_PATTERN = /(?:überzahlung|uberzahlung)/iu;
+
+export function findOverpaymentCells(
+  values: Array<Array<string | number>>
+): Array<{ rowIndex: number; columnIndex: number }> {
+  const matches: Array<{ rowIndex: number; columnIndex: number }> = [];
+  values.forEach((row, rowIndex) => {
+    row.forEach((value, columnIndex) => {
+      if (typeof value === 'string' && OVERPAYMENT_PATTERN.test(value)) {
+        matches.push({ rowIndex, columnIndex });
+      }
+    });
+  });
+  return matches;
 }
 
 function round2(value: number) {
@@ -179,5 +200,8 @@ export function buildSheetPlans(
     ]
   });
 
-  return plans;
+  return plans.map((plan) => ({
+    ...plan,
+    overpaymentCells: findOverpaymentCells(plan.values)
+  }));
 }

@@ -444,6 +444,7 @@ export function buildStaleSheetClearRanges(
 // Color definitions for formatting
 const COLORS = {
   black: { red: 0, green: 0, blue: 0 },
+  overpaymentRed: { red: 0.8, green: 0, blue: 0 },
   white: { red: 1, green: 1, blue: 1 },
   lightBlue: { red: 0.88, green: 0.93, blue: 0.98 },
   headerBlue: { red: 0.75, green: 0.84, blue: 0.94 },
@@ -775,6 +776,14 @@ function buildFormattingRequests(
     });
   }
 
+  // Apply this after the base layout so Überzahlung notes remain prominent.
+  requests.push(
+    ...buildOverpaymentFormattingRequests(
+      [plan],
+      new Map([[plan.title, sheetId]])
+    )
+  );
+
   return requests;
 }
 
@@ -1004,6 +1013,86 @@ export async function updateGoogleSpreadsheet(
     updatedSheets: plans.length,
     removedSheets: obsoleteSheets.map((sheet) => sheet.properties.title)
   };
+}
+
+/**
+ * Applies current Überzahlung emphasis to an existing workbook without writing
+ * any values, changing its tabs, moving its Drive file, or touching D1.
+ */
+export async function highlightOverpaymentsInGoogleSpreadsheet(
+  env: Env,
+  plans: SheetPlan[],
+  options: SpreadsheetUpdateOptions = {}
+): Promise<{ highlightedCells: number }> {
+  const spreadsheetId = options.spreadsheetId || env.GOOGLE_SPREADSHEET_ID;
+  const authMode = options.authMode || 'service';
+  if (!spreadsheetId || spreadsheetId.startsWith('REPLACE_')) {
+    throw new Error('GOOGLE_SPREADSHEET_ID is not configured.');
+  }
+
+  const metadata = await googleFetch<SheetMetadata>(
+    env,
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets(properties(sheetId,title))`,
+    {},
+    authMode
+  );
+  const sheetIdByTitle = new Map(
+    metadata.sheets.map((sheet) => [sheet.properties.title, sheet.properties.sheetId])
+  );
+  const requests = buildOverpaymentFormattingRequests(plans, sheetIdByTitle);
+  if (!requests.length) return { highlightedCells: 0 };
+
+  const chunkSize = 300;
+  for (let start = 0; start < requests.length; start += chunkSize) {
+    await googleFetch(
+      env,
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ requests: requests.slice(start, start + chunkSize) })
+      },
+      authMode
+    );
+  }
+  return { highlightedCells: requests.length };
+}
+
+/**
+ * Creates only formatting operations for Überzahlung cells. It is reused by
+ * ordinary exports and by the safe one-time refresh for existing files.
+ */
+export function buildOverpaymentFormattingRequests(
+  plans: SheetPlan[],
+  sheetIdByTitle: ReadonlyMap<string, number>
+): Record<string, unknown>[] {
+  const requests: Record<string, unknown>[] = [];
+  for (const plan of plans) {
+    const sheetId = sheetIdByTitle.get(plan.title);
+    if (sheetId == null) continue;
+    for (const cell of plan.overpaymentCells || []) {
+      requests.push({
+        repeatCell: {
+          range: {
+            sheetId,
+            startRowIndex: cell.rowIndex,
+            endRowIndex: cell.rowIndex + 1,
+            startColumnIndex: cell.columnIndex,
+            endColumnIndex: cell.columnIndex + 1
+          },
+          cell: {
+            userEnteredFormat: {
+              textFormat: {
+                foregroundColor: COLORS.overpaymentRed,
+                bold: true
+              }
+            }
+          },
+          fields: 'userEnteredFormat.textFormat.foregroundColor,userEnteredFormat.textFormat.bold'
+        }
+      });
+    }
+  }
+  return requests;
 }
 
 function initialSheetProperties(plan: SheetPlan) {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildOverpaymentFormattingRequests,
   buildMissingSheetRequests,
   buildSheetCapacityRequests,
   buildStaleSheetClearRanges
@@ -103,4 +104,41 @@ test('sheet capacity expands without shrinking the last good export', () => {
     ),
     []
   );
+});
+
+test('Überzahlung hints are bold red in exactly their own cells', () => {
+  const values = [
+    ['Datum', 'Hinweis'],
+    ['2026-09-15', 'Überzahlung 190 €'],
+    ['2026-09-16', 'Normaler Hinweis']
+  ];
+  const requests = buildOverpaymentFormattingRequests(
+    [{
+      title: 'Service',
+      values,
+      overpaymentCells: [{ rowIndex: 1, columnIndex: 1 }]
+    }],
+    new Map([['Service', 73]])
+  );
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0], {
+    repeatCell: {
+      range: {
+        sheetId: 73,
+        startRowIndex: 1,
+        endRowIndex: 2,
+        startColumnIndex: 1,
+        endColumnIndex: 2
+      },
+      cell: {
+        userEnteredFormat: {
+          textFormat: {
+            foregroundColor: { red: 0.8, green: 0, blue: 0 },
+            bold: true
+          }
+        }
+      },
+      fields: 'userEnteredFormat.textFormat.foregroundColor,userEnteredFormat.textFormat.bold'
+    }
+  });
 });

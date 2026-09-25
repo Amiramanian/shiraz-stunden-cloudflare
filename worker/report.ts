@@ -10,6 +10,7 @@ import {
 import { buildSheetPlans } from './report-data';
 import {
   createMonthlyGoogleSpreadsheet,
+  highlightOverpaymentsInGoogleSpreadsheet,
   isMonthlyGoogleDriveConfigured,
   removeMonthlyGoogleSpreadsheet,
   updateGoogleSpreadsheet
@@ -83,6 +84,49 @@ async function updateExistingMonthlyReports(
     });
   }
   return updated;
+}
+
+/**
+ * Retroactively applies the visual indicator to existing monthly files. This
+ * uses only Google Sheets formatting requests, never value writes or D1 edits.
+ */
+export async function highlightExistingMonthlyReportOverpayments(env: Env) {
+  if (!isMonthlyGoogleDriveConfigured(env)) {
+    throw new Error('Existing monthly files cannot be formatted because Google Drive OAuth is not connected.');
+  }
+
+  const [reports, shifts, hinweise, staff] = await Promise.all([
+    listMonthlyReports(env),
+    listShifts(env),
+    listHinweise(env),
+    listStaff(env)
+  ]);
+  const results = [];
+
+  for (const report of reports) {
+    const monthlyShifts = shifts.filter((shift) =>
+      isDateInReportMonth(shift.date, report.reportMonth)
+    );
+    const monthlyHinweise = hinweise.filter((note) =>
+      isDateInReportMonth(note.date, report.reportMonth)
+    );
+    const result = await highlightOverpaymentsInGoogleSpreadsheet(
+      env,
+      buildSheetPlans(monthlyShifts, monthlyHinweise, staff),
+      {
+        spreadsheetId: report.spreadsheetId,
+        authMode: 'user',
+        webViewLink: report.webViewLink,
+        protectionEditorEmail: null
+      }
+    );
+    results.push({
+      reportMonth: report.reportMonth,
+      highlightedCells: result.highlightedCells
+    });
+  }
+
+  return results;
 }
 
 function wait(milliseconds: number): Promise<void> {

@@ -74,6 +74,7 @@ export const base44 = {
     async invoke(name, body = {}) {
       const routes = {
         exportToGoogleDrive: ['/api/report/export', 'POST'],
+        highlightOverpayments: ['/api/report/highlight-overpayments', 'POST'],
         getAnalyticsReport: ['/api/report/analytics', 'GET'],
         getDriveFileLink: ['/api/report/link', 'GET'],
         getSetupStatus: ['/api/setup-status', 'GET'],

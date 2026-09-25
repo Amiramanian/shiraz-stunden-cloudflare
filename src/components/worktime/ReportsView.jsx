@@ -52,6 +52,7 @@ export default function ReportsView({ onBack }) {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [highlightingOverpayments, setHighlightingOverpayments] = useState(false);
   const [monthlyReports, setMonthlyReports] = useState([]);
   const [monthlyCreating, setMonthlyCreating] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState(nextMonthValue);
@@ -103,6 +104,26 @@ export default function ReportsView({ onBack }) {
       await load();
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function highlightOverpayments() {
+    setHighlightingOverpayments(true);
+    setMessage('');
+    try {
+      const response = await base44.functions.invoke('highlightOverpayments', {});
+      const reports = Array.isArray(response.data.reports) ? response.data.reports : [];
+      const highlightedCells = reports.reduce(
+        (total, report) => total + Number(report.highlightedCells || 0),
+        0
+      );
+      setMessage(
+        `${highlightedCells} Überzahlung-Hinweis(e) in ${reports.length} Monatsdatei(en) wurden rot und fett markiert.`
+      );
+    } catch (error) {
+      setMessage(`Fehler: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setHighlightingOverpayments(false);
     }
   }
 
@@ -206,6 +227,16 @@ export default function ReportsView({ onBack }) {
       >
         <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
         {refreshing ? 'Wird aktualisiert...' : 'Jetzt aktualisieren'}
+      </button>
+
+      <button
+        onClick={highlightOverpayments}
+        disabled={highlightingOverpayments || !status?.googleSheet?.monthlyDriveConfigured}
+        className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-red-700 bg-white py-3 font-bold text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+      >
+        {highlightingOverpayments
+          ? 'Überzahlungen werden formatiert...'
+          : 'Überzahlungen rot und fett markieren'}
       </button>
 
       <AnalyticsReport />
