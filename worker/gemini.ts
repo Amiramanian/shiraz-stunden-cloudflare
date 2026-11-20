@@ -20,6 +20,14 @@ function isRetryableStatus(status: number): boolean {
     status >= 500;
 }
 
+function isTransientTransportError(error: unknown): boolean {
+  if (error instanceof DOMException) {
+    return error.name === 'TimeoutError' || error.name === 'AbortError';
+  }
+  if (!(error instanceof Error)) return false;
+  return /(?:timeout|timed out|abort(?:ed)?|network|fetch failed)/i.test(error.message);
+}
+
 function retryAfterMilliseconds(value: string | null): number | undefined {
   if (!value) return undefined;
   const seconds = Number(value);
@@ -122,13 +130,19 @@ export async function generateGeminiJson(
     'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
   const model = input.model || env.GEMINI_MODEL || 'gemini-3.6-flash';
   const endpoint = `${baseUrl}/models/${encodeURIComponent(model)}:generateContent`;
+  // A single long-running request is less useful than a bounded retry followed
+  // by the independent fallback providers.  Two attempts keep a temporarily
+  // overloaded Gemini service recoverable without making the user wait through
+  // four full request timeouts.
+  const maxAttempts = 2;
+  const timeoutMs = Math.min(Math.max(input.timeoutMs || 45_000, 10_000), 60_000);
   let lastError: unknown;
 
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
-        signal: AbortSignal.timeout(input.timeoutMs || 45_000),
+        signal: AbortSignal.timeout(timeoutMs),
         headers: {
           'Content-Type': 'application/json',
           'x-goog-api-key': env.GEMINI_API_KEY
@@ -182,15 +196,18 @@ export async function generateGeminiJson(
       return parseJsonText(content);
     } catch (error) {
       lastError = error;
-      const retryable = error instanceof GeminiHttpError && error.retryable;
+      const retryable = (error instanceof GeminiHttpError && error.retryable) ||
+        isTransientTransportError(error);
       console.warn(JSON.stringify({
         event: 'gemini_attempt_failed',
         attempt,
+        maxAttempts,
+        timeoutMs,
         retryable,
         status: error instanceof GeminiHttpError ? error.status : undefined,
         message: error instanceof Error ? error.message.slice(0, 160) : 'unknown'
       }));
-      if (!retryable || attempt === 4) break;
+      if (!retryable || attempt === maxAttempts) break;
       const retryAfter = error instanceof GeminiHttpError ? error.retryAfterMs : undefined;
       // Direct REST calls do not receive the SDK's automatic retry behaviour.
       // Use the provider delay when supplied, otherwise use bounded
@@ -198,6 +215,12 @@ export async function generateGeminiJson(
       const delay = retryAfter ?? ((2 ** (attempt - 1)) * 1_000 + Math.floor(Math.random() * 250));
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
+  }
+
+  if (isTransientTransportError(lastError)) {
+    throw new Error(
+      `Gemini timed out after ${maxAttempts} automatic attempt(s); a fallback service will be attempted.`
+    );
   }
 
   throw lastError instanceof Error

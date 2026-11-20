@@ -299,10 +299,12 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
       const result = await requestScan(scanInput);
       scanInput.latestResult = result;
 
+      presentScanResult(result);
       if (shouldRunDetailedScan(result)) {
-        await runDetailedScan(scanInput, result);
-      } else {
-        presentScanResult(result);
+        setWarningMsg((current) => [
+          current,
+          'Der schnelle Scan wurde angezeigt. Für eine zweite Analyse mit lokaler OCR bitte „Genauer scannen“ wählen.'
+        ].filter(Boolean).join(' '));
       }
     } catch (err) {
       console.error('Scan error:', err);

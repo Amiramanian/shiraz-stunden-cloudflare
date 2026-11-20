@@ -76,17 +76,6 @@ interface ProviderCandidate extends NormalizedProviderResult {
   rawOutput: ScanProviderOutput;
 }
 
-function providerCandidateQuality(candidate: NormalizedProviderResult): number {
-  if (candidate.shifts.length === 0) return -Infinity;
-  const confidence = candidate.shifts.reduce(
-    (sum, shift) => sum + (Number.isFinite(shift.confidence) ? Number(shift.confidence) : 0.5),
-    0
-  ) / candidate.shifts.length;
-  const mismatchPenalty = candidate.shifts.filter((shift) => shift.hoursMismatch).length * 0.2;
-  const missingDatePenalty = candidate.shifts.filter((shift) => !shift.date).length * 0.1;
-  return confidence - mismatchPenalty - missingDatePenalty;
-}
-
 const MAX_IMAGE_COUNT = 10;
 function providerDisplayName(provider: ScanProviderName): string {
   const names: Record<ScanProviderName, string> = {
@@ -397,7 +386,6 @@ export async function processScanRequest(
     const providerFailures: ProviderFailure[] = [];
     let candidate: ProviderCandidate | null = null;
 
-    let candidateQuality = -Infinity;
     for (const provider of providers) {
       try {
         const rawOutput = await callScanProvider(env, provider, {
@@ -431,28 +419,22 @@ export async function processScanRequest(
           continue;
         }
 
-        const nextQuality = providerCandidateQuality(normalized);
-        if (candidate === null || nextQuality > candidateQuality) {
-          candidate = nextCandidate;
-          candidateQuality = nextQuality;
-        }
+        candidate = nextCandidate;
 
         // Gemini is the selected high-quality transcriber. An uncertain row
         // remains visible for a person to review; it must not cause a weaker
         // fallback to replace the whole sheet with guesses.
         if (provider === 'gemini') break;
 
-        // Do not spend extra inference on a result that is already clear.
-        // Ambiguous handwriting gets one or more free fallback verifications.
-        const hasAmbiguousRows = normalized.shifts.some(
-          (shift) => shift.hoursMismatch || (shift.confidence ?? 0) < 0.78 || !shift.date
+        // The first usable fallback is shown for human review. Continuing with
+        // every provider made a single failed Gemini request turn into several
+        // slow, serial scans and still could not safely resolve handwriting.
+        // Uncertain rows stay marked and the user can explicitly request the
+        // detailed scan when it is worthwhile.
+        providerWarnings.push(
+          `${providerDisplayName(provider)} lieferte ein Ergebnis zur Prüfung; weitere automatische KI-Aufrufe wurden übersprungen.`
         );
-        if (!hasAmbiguousRows && nextQuality >= 0.78) break;
-        if (hasAmbiguousRows) {
-          providerWarnings.push(
-            `${providerDisplayName(provider)} meldete eine unsichere Zeile; ein weiterer Dienst wird zur Gegenprüfung versucht.`
-          );
-        }
+        break;
       } catch (error) {
         const failureMessage = error instanceof Error
           ? error.message

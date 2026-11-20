@@ -349,12 +349,21 @@ async function callWorkersAiProvider(
   provider: WorkersAiProvider,
   context: ScanProviderContext
 ): Promise<ScanProviderOutput> {
+  // Vision requests are independent per page. A small concurrency limit keeps
+  // multi-page sheets responsive without creating an expensive request burst.
+  const concurrency = Math.min(2, context.images.length);
   const combined: ScanProviderOutput = { shifts: [], documentDates: {} };
-  for (let imageIndex = 0; imageIndex < context.images.length; imageIndex += 1) {
-    const output = await callWorkersAiForImage(env, provider, context, imageIndex);
-    combined.shifts.push(...output.shifts);
-    Object.assign(combined.documentDates, output.documentDates);
-  }
+  let nextImageIndex = 0;
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (nextImageIndex < context.images.length) {
+      const imageIndex = nextImageIndex;
+      nextImageIndex += 1;
+      const output = await callWorkersAiForImage(env, provider, context, imageIndex);
+      combined.shifts.push(...output.shifts);
+      Object.assign(combined.documentDates, output.documentDates);
+    }
+  });
+  await Promise.all(workers);
   return combined;
 }
 
@@ -441,12 +450,19 @@ async function callGroqProvider(
   env: Env,
   context: ScanProviderContext
 ): Promise<ScanProviderOutput> {
+  const concurrency = Math.min(2, context.images.length);
   const combined: ScanProviderOutput = { shifts: [], documentDates: {} };
-  for (let imageIndex = 0; imageIndex < context.images.length; imageIndex += 1) {
-    const output = await callGroqForImage(env, context, imageIndex);
-    combined.shifts.push(...output.shifts);
-    Object.assign(combined.documentDates, output.documentDates);
-  }
+  let nextImageIndex = 0;
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (nextImageIndex < context.images.length) {
+      const imageIndex = nextImageIndex;
+      nextImageIndex += 1;
+      const output = await callGroqForImage(env, context, imageIndex);
+      combined.shifts.push(...output.shifts);
+      Object.assign(combined.documentDates, output.documentDates);
+    }
+  });
+  await Promise.all(workers);
   return combined;
 }
 
