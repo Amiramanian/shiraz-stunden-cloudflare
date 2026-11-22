@@ -76,10 +76,32 @@ interface ProviderCandidate extends NormalizedProviderResult {
   rawOutput: ScanProviderOutput;
 }
 
+function providerCandidateQuality(candidate: NormalizedProviderResult): number {
+  if (candidate.shifts.length === 0) return -Infinity;
+  const confidence = candidate.shifts.reduce(
+    (sum, shift) => sum + (Number.isFinite(shift.confidence) ? Number(shift.confidence) : 0.5),
+    0
+  ) / candidate.shifts.length;
+  const mismatchPenalty = candidate.shifts.filter((shift) => shift.hoursMismatch).length * 0.2;
+  const missingDatePenalty = candidate.shifts.filter((shift) => !shift.date).length * 0.1;
+  return confidence - mismatchPenalty - missingDatePenalty;
+}
+
+function needsQwenVerification(candidate: NormalizedProviderResult): boolean {
+  return candidate.skippedCount > 0 || candidate.shifts.some(
+    (shift) => shift.hoursMismatch || (shift.confidence ?? 0) < 0.75 || !shift.date
+  );
+}
+
 const MAX_IMAGE_COUNT = 10;
+// A paid/high-capability verifier must never fan out over a large upload.
+// Three pages covers the normal daily sheet while keeping the exceptional path
+// predictable and bounded.
+const MAX_QWEN_VERIFICATION_IMAGES = 3;
 function providerDisplayName(provider: ScanProviderName): string {
   const names: Record<ScanProviderName, string> = {
     'cloudflare-mistral': 'Cloudflare Mistral Vision',
+    'cloudflare-qwen': 'Cloudflare Qwen Vision',
     'cloudflare-moondream': 'Cloudflare Moondream OCR',
     'cloudflare-gemma': 'Cloudflare Gemma Vision',
     gemini: 'Google Gemini',
@@ -385,6 +407,7 @@ export async function processScanRequest(
     const providerWarnings: string[] = [...imageExtraction.warnings];
     const providerFailures: ProviderFailure[] = [];
     let candidate: ProviderCandidate | null = null;
+    let candidateQuality = -Infinity;
 
     for (const provider of providers) {
       try {
@@ -419,18 +442,34 @@ export async function processScanRequest(
           continue;
         }
 
-        candidate = nextCandidate;
+        const nextQuality = providerCandidateQuality(normalized);
+        if (candidate === null || nextQuality >= candidateQuality) {
+          candidate = nextCandidate;
+          candidateQuality = nextQuality;
+        }
 
         // Gemini is the selected high-quality transcriber. An uncertain row
         // remains visible for a person to review; it must not cause a weaker
         // fallback to replace the whole sheet with guesses.
         if (provider === 'gemini') break;
 
-        // The first usable fallback is shown for human review. Continuing with
-        // every provider made a single failed Gemini request turn into several
-        // slow, serial scans and still could not safely resolve handwriting.
-        // Uncertain rows stay marked and the user can explicitly request the
-        // detailed scan when it is worthwhile.
+        // A second vision model is used only for an ambiguous Mistral result.
+        // It is intentionally one controlled verification pass: this protects
+        // the quality of difficult handwriting without returning to the old
+        // slow fan-out through every available provider.
+        if (provider === 'cloudflare-mistral' && needsQwenVerification(normalized)) {
+          if (request.images.length <= MAX_QWEN_VERIFICATION_IMAGES) {
+            providerWarnings.push(
+              'Cloudflare Mistral Vision meldete unsichere Zeilen; Qwen Vision prüft diese einmal nach.'
+            );
+            continue;
+          }
+          providerWarnings.push(
+            'Cloudflare Mistral Vision meldete unsichere Zeilen. Die Qwen-Gegenprüfung wurde bei mehr als drei Seiten aus Kostenschutz nicht automatisch ausgeführt.'
+          );
+          break;
+        }
+
         providerWarnings.push(
           `${providerDisplayName(provider)} lieferte ein Ergebnis zur Prüfung; weitere automatische KI-Aufrufe wurden übersprungen.`
         );
@@ -455,6 +494,9 @@ export async function processScanRequest(
         providerWarnings.push(
           `${providerDisplayName(provider)} war nicht verfügbar; der nächste Dienst wurde versucht.`
         );
+        // Once a usable result exists, a failed verification must not restart
+        // a long sequence of weaker providers. The review flags remain visible.
+        if (candidate) break;
       }
     }
 

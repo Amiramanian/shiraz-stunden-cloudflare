@@ -7,13 +7,14 @@ import {
 
 export type ScanProviderName =
   | 'cloudflare-mistral'
+  | 'cloudflare-qwen'
   | 'cloudflare-moondream'
   | 'cloudflare-gemma'
   | 'gemini'
   | 'groq-qwen';
 
 type WorkersAiProvider = Extract<ScanProviderName,
-  'cloudflare-mistral' | 'cloudflare-moondream' | 'cloudflare-gemma'>;
+  'cloudflare-mistral' | 'cloudflare-qwen' | 'cloudflare-moondream' | 'cloudflare-gemma'>;
 
 export interface ScannedShiftRaw {
   employee: string;
@@ -308,6 +309,23 @@ async function callWorkersAiForImage(
       temperature: 0,
       max_tokens: 4096
     }, { tags: ['shiraz-shift-scan', provider] });
+  } else if (provider === 'cloudflare-qwen') {
+    // Qwen is deliberately a bounded verifier for hard handwriting, not a
+    // second default OCR pass. Its structured response avoids prose being
+    // mistaken for a shift during parsing.
+    output = await env.AI.run('@cf/qwen/qwen3.8-27b', {
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: image } }
+        ]
+      }],
+      temperature: 0,
+      max_completion_tokens: 1800,
+      reasoning_effort: 'low',
+      response_format: { type: 'json_object' }
+    }, { tags: ['shiraz-shift-scan', provider] });
   } else if (provider === 'cloudflare-mistral') {
     output = await env.AI.run('@cf/mistralai/mistral-small-3.1-24b-instruct', {
       messages: [{
@@ -351,7 +369,10 @@ async function callWorkersAiProvider(
 ): Promise<ScanProviderOutput> {
   // Vision requests are independent per page. A small concurrency limit keeps
   // multi-page sheets responsive without creating an expensive request burst.
-  const concurrency = Math.min(2, context.images.length);
+  const concurrency = Math.min(
+    provider === 'cloudflare-qwen' ? 1 : 2,
+    context.images.length
+  );
   const combined: ScanProviderOutput = { shifts: [], documentDates: {} };
   let nextImageIndex = 0;
   const workers = Array.from({ length: concurrency }, async () => {
@@ -474,7 +495,12 @@ export function getAvailableScanProviders(env: Env): ScanProviderName[] {
   if (env.GEMINI_API_KEY) providers.push('gemini');
   if (env.GROQ_API_KEY) providers.push('groq-qwen');
   if (env.AI) {
-    providers.push('cloudflare-mistral', 'cloudflare-gemma', 'cloudflare-moondream');
+    providers.push(
+      'cloudflare-mistral',
+      'cloudflare-qwen',
+      'cloudflare-gemma',
+      'cloudflare-moondream'
+    );
   }
   return providers;
 }

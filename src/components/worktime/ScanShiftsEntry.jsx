@@ -547,6 +547,7 @@ export default function ScanShiftsEntry({ business, staffConfig, todayIso, onCon
     if (source === 'ocr') return 'OCR';
     if (source === 'gemini') return 'Gemini';
     if (source === 'cloudflare-mistral') return 'Cloudflare Mistral';
+    if (source === 'cloudflare-qwen') return 'Cloudflare Qwen Vision';
     if (source === 'cloudflare-moondream') return 'Cloudflare Moondream';
     if (source === 'cloudflare-gemma') return 'Cloudflare Gemma';
     if (source === 'groq-qwen') return 'Groq Qwen Vision';

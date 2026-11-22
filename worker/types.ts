@@ -63,6 +63,7 @@ export interface ScannedShift {
   confidence?: number;
   source?:
     | 'cloudflare-mistral'
+    | 'cloudflare-qwen'
     | 'cloudflare-moondream'
     | 'cloudflare-gemma'
     | 'gemini'
