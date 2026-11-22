@@ -13,6 +13,8 @@ export interface Env extends Cloudflare.Env {
   GOOGLE_OAUTH_REFRESH_TOKEN?: string;
   GEMINI_API_KEY: string;
   GROQ_API_KEY?: string;
+  OPENAI_API_KEY?: string;
+  OPENAI_MODEL?: string;
 }
 
 export interface ShiftRecord {
@@ -63,6 +65,7 @@ export interface ScannedShift {
   confidence?: number;
   source?:
     | 'cloudflare-mistral'
+    | 'openai-gpt'
     | 'cloudflare-qwen'
     | 'cloudflare-moondream'
     | 'cloudflare-gemma'

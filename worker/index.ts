@@ -783,6 +783,7 @@ async function handleApi(request: Request, env: Env, ctx: ExecutionContext): Pro
         },
         models: {
           cloudflareMistral: '@cf/mistralai/mistral-small-3.1-24b-instruct',
+          openai: env.OPENAI_MODEL || 'gpt-5.4',
           cloudflareQwen: '@cf/qwen/qwen3.8-27b',
           cloudflareMoondream: '@cf/moondream/moondream3.1-9B-A2B',
           cloudflareGemma: '@cf/google/gemma-4-26b-a4b-it',

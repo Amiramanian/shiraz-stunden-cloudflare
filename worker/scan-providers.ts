@@ -7,6 +7,7 @@ import {
 
 export type ScanProviderName =
   | 'cloudflare-mistral'
+  | 'openai-gpt'
   | 'cloudflare-qwen'
   | 'cloudflare-moondream'
   | 'cloudflare-gemma'
@@ -109,6 +110,37 @@ const SHIFT_OUTPUT_SCHEMA = {
             }
           }
         }
+      }
+    }
+  }
+} as const;
+
+// Responses API Structured Outputs require explicit required properties and no
+// additional fields at every object level. Keeping the schema single-image
+// mirrors the existing fallback parser and avoids loose JSON from a vision
+// model becoming a guessed shift.
+const OPENAI_SINGLE_IMAGE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['documentDate', 'shifts'],
+  properties: {
+    documentDate: { type: 'string' },
+    shifts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'employee',
+          'department',
+          'date',
+          'startTime',
+          'endTime',
+          'confidence',
+          'evidence',
+          'writtenHours'
+        ],
+        properties: SHIFT_PROPERTIES
       }
     }
   }
@@ -267,7 +299,7 @@ function extractTextValue(value: unknown): string {
   }
 
   const record = asRecord(value);
-  for (const key of ['answer', 'response', 'output_text', 'text', 'content']) {
+  for (const key of ['answer', 'response', 'output_text', 'text', 'content', 'output']) {
     const text = extractTextValue(record[key]);
     if (text) return text;
   }
@@ -467,6 +499,88 @@ async function callGroqForImage(
   return parseSingleImagePayload(parseJsonText(responseText, 'groq-qwen'), 'groq-qwen', imageIndex);
 }
 
+async function callOpenAiForImage(
+  env: Env,
+  context: ScanProviderContext,
+  imageIndex: number
+): Promise<ScanProviderOutput> {
+  if (!env.OPENAI_API_KEY) throw new Error('OpenAI API key not configured');
+
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    signal: AbortSignal.timeout(60_000),
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${env.OPENAI_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: env.OPENAI_MODEL || 'gpt-5.4',
+      store: false,
+      reasoning: { effort: 'low' },
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_text', text: buildSingleImagePrompt(context, imageIndex) },
+          { type: 'input_image', image_url: context.images[imageIndex], detail: 'high' }
+        ]
+      }],
+      max_output_tokens: 1800,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'shift_sheet',
+          strict: true,
+          schema: OPENAI_SINGLE_IMAGE_SCHEMA
+        }
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errorBody = await readBodyLimited(response, 8 * 1024).catch(() => '');
+    let detail = '';
+    try {
+      detail = String(asRecord(asRecord(JSON.parse(errorBody)).error).message || '')
+        .replace(/\s+/g, ' ')
+        .slice(0, 240);
+    } catch {
+      // Status is sufficient when a provider returns a non-JSON error body.
+    }
+    throw new Error(`OpenAI request failed (${response.status})${detail ? `: ${detail}` : ''}`);
+  }
+
+  const body = await readBodyLimited(response, 2 * 1024 * 1024);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    throw new Error('OpenAI returned invalid response JSON');
+  }
+
+  const responseText = extractTextValue(payload);
+  if (!responseText) throw new Error('OpenAI returned an empty response');
+  return parseSingleImagePayload(
+    parseJsonText(responseText, 'openai-gpt'),
+    'openai-gpt',
+    imageIndex
+  );
+}
+
+async function callOpenAiProvider(
+  env: Env,
+  context: ScanProviderContext
+): Promise<ScanProviderOutput> {
+  // The paid verifier is serialized deliberately. A daily sheet is normally
+  // one image and three pages are the maximum verification batch.
+  const combined: ScanProviderOutput = { shifts: [], documentDates: {} };
+  for (let imageIndex = 0; imageIndex < context.images.length; imageIndex += 1) {
+    const output = await callOpenAiForImage(env, context, imageIndex);
+    combined.shifts.push(...output.shifts);
+    Object.assign(combined.documentDates, output.documentDates);
+  }
+  return combined;
+}
+
 async function callGroqProvider(
   env: Env,
   context: ScanProviderContext
@@ -497,6 +611,7 @@ export function getAvailableScanProviders(env: Env): ScanProviderName[] {
   if (env.AI) {
     providers.push(
       'cloudflare-mistral',
+      ...(env.OPENAI_API_KEY ? ['openai-gpt' as const] : []),
       'cloudflare-qwen',
       'cloudflare-gemma',
       'cloudflare-moondream'
@@ -512,6 +627,9 @@ export async function callScanProvider(
 ): Promise<ScanProviderOutput> {
   if (provider === 'groq-qwen') {
     return callGroqProvider(env, context);
+  }
+  if (provider === 'openai-gpt') {
+    return callOpenAiProvider(env, context);
   }
   if (provider !== 'gemini') {
     return callWorkersAiProvider(env, provider, context);

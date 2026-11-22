@@ -87,7 +87,7 @@ function providerCandidateQuality(candidate: NormalizedProviderResult): number {
   return confidence - mismatchPenalty - missingDatePenalty;
 }
 
-function needsQwenVerification(candidate: NormalizedProviderResult): boolean {
+function needsHighQualityVerification(candidate: NormalizedProviderResult): boolean {
   return candidate.skippedCount > 0 || candidate.shifts.some(
     (shift) => shift.hoursMismatch || (shift.confidence ?? 0) < 0.75 || !shift.date
   );
@@ -97,10 +97,11 @@ const MAX_IMAGE_COUNT = 10;
 // A paid/high-capability verifier must never fan out over a large upload.
 // Three pages covers the normal daily sheet while keeping the exceptional path
 // predictable and bounded.
-const MAX_QWEN_VERIFICATION_IMAGES = 3;
+const MAX_HIGH_QUALITY_VERIFICATION_IMAGES = 3;
 function providerDisplayName(provider: ScanProviderName): string {
   const names: Record<ScanProviderName, string> = {
     'cloudflare-mistral': 'Cloudflare Mistral Vision',
+    'openai-gpt': 'OpenAI GPT Vision',
     'cloudflare-qwen': 'Cloudflare Qwen Vision',
     'cloudflare-moondream': 'Cloudflare Moondream OCR',
     'cloudflare-gemma': 'Cloudflare Gemma Vision',
@@ -443,7 +444,7 @@ export async function processScanRequest(
         }
 
         const nextQuality = providerCandidateQuality(normalized);
-        if (candidate === null || nextQuality >= candidateQuality) {
+        if (provider === 'openai-gpt' || candidate === null || nextQuality >= candidateQuality) {
           candidate = nextCandidate;
           candidateQuality = nextQuality;
         }
@@ -453,19 +454,19 @@ export async function processScanRequest(
         // fallback to replace the whole sheet with guesses.
         if (provider === 'gemini') break;
 
-        // A second vision model is used only for an ambiguous Mistral result.
+        // A high-quality paid verifier is used only for an ambiguous Mistral result.
         // It is intentionally one controlled verification pass: this protects
         // the quality of difficult handwriting without returning to the old
         // slow fan-out through every available provider.
-        if (provider === 'cloudflare-mistral' && needsQwenVerification(normalized)) {
-          if (request.images.length <= MAX_QWEN_VERIFICATION_IMAGES) {
+        if (provider === 'cloudflare-mistral' && needsHighQualityVerification(normalized)) {
+          if (request.images.length <= MAX_HIGH_QUALITY_VERIFICATION_IMAGES) {
             providerWarnings.push(
-              'Cloudflare Mistral Vision meldete unsichere Zeilen; Qwen Vision prüft diese einmal nach.'
+              'Cloudflare Mistral Vision meldete unsichere Zeilen; OpenAI GPT Vision prüft diese einmal nach.'
             );
             continue;
           }
           providerWarnings.push(
-            'Cloudflare Mistral Vision meldete unsichere Zeilen. Die Qwen-Gegenprüfung wurde bei mehr als drei Seiten aus Kostenschutz nicht automatisch ausgeführt.'
+            'Cloudflare Mistral Vision meldete unsichere Zeilen. Die hochwertige Gegenprüfung wurde bei mehr als drei Seiten aus Kostenschutz nicht automatisch ausgeführt.'
           );
           break;
         }
